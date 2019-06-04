@@ -23,7 +23,7 @@ require (
 	github.com/pierrec/lz4 v2.0.5+incompatible // indirect
 	github.com/stoewer/go-strcase v1.0.2 // indirect
 	github.com/terraform-providers/terraform-provider-aws v0.0.0-20190510001811-4b894dbf13f6
-	github.com/terraform-providers/terraform-provider-google v1.20.0
+	github.com/terraform-providers/terraform-provider-google/v2 v2.8.0
 	github.com/terraform-providers/terraform-provider-random v2.0.0+incompatible // indirect
 	github.com/ulikunitz/xz v0.5.6 // indirect
 	github.com/vmihailenco/msgpack v4.0.4+incompatible // indirect
