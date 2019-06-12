@@ -11,7 +11,6 @@ require (
 	github.com/gregjones/httpcache v0.0.0-20190212212710-3befbb6ad0cc // indirect
 	github.com/hashicorp/go-hclog v0.7.0 // indirect
 	github.com/hashicorp/go-version v1.2.0
-	github.com/hashicorp/hcl v1.0.0 // indirect
 	github.com/hashicorp/hil v0.0.0-20190212132231-97b3a9cdfa93 // indirect
 	github.com/hashicorp/terraform v0.12.1
 	github.com/hashicorp/vault v1.1.2 // indirect
@@ -24,7 +23,7 @@ require (
 	github.com/stoewer/go-strcase v1.0.2 // indirect
 	github.com/terraform-providers/terraform-provider-aws v0.0.0-20190510001811-4b894dbf13f6
 	github.com/terraform-providers/terraform-provider-google v1.20.0
-	github.com/terraform-providers/terraform-provider-random v2.0.0+incompatible // indirect
+	github.com/terraform-providers/terraform-provider-random v0.0.0-20190430215304-58e0a7183d4f // indirect
 	github.com/ulikunitz/xz v0.5.6 // indirect
 	github.com/vmihailenco/msgpack v4.0.4+incompatible // indirect
 	k8s.io/api v0.0.0-20181221193117-173ce66c1e39
