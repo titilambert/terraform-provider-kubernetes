@@ -2,11 +2,11 @@ package aws
 
 import (
 	"fmt"
-	"log"
 	"regexp"
 	"time"
 
 	"github.com/aws/aws-sdk-go/service/sns"
+	"github.com/hashicorp/errwrap"
 	"github.com/hashicorp/terraform/helper/schema"
 )
 
@@ -42,7 +42,6 @@ func dataSourceAwsSnsTopicsRead(d *schema.ResourceData, meta interface{}) error 
 
 	target := d.Get("name")
 	var arns []string
-	log.Printf("[DEBUG] Reading SNS Topic: %s", params)
 	err := conn.ListTopicsPages(params, func(page *sns.ListTopicsOutput, lastPage bool) bool {
 		for _, topic := range page.Topics {
 			topicPattern := fmt.Sprintf(".*:%v$", target)
@@ -55,7 +54,7 @@ func dataSourceAwsSnsTopicsRead(d *schema.ResourceData, meta interface{}) error 
 		return true
 	})
 	if err != nil {
-		return fmt.Errorf("Error describing topics: %s", err)
+		return errwrap.Wrapf("Error describing topics: {{err}}", err)
 	}
 
 	if len(arns) == 0 {

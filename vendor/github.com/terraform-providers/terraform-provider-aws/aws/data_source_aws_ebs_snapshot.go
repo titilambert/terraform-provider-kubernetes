@@ -3,9 +3,7 @@ package aws
 import (
 	"fmt"
 	"log"
-	"sort"
 
-	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/hashicorp/terraform/helper/schema"
 )
@@ -82,7 +80,7 @@ func dataSourceAwsEbsSnapshot() *schema.Resource {
 				Type:     schema.TypeString,
 				Computed: true,
 			},
-			"tags": tagsSchemaComputed(),
+			"tags": dataSourceTagsSchema(),
 		},
 	}
 }
@@ -113,28 +111,34 @@ func dataSourceAwsEbsSnapshotRead(d *schema.ResourceData, meta interface{}) erro
 		params.SnapshotIds = expandStringList(snapshotIds.([]interface{}))
 	}
 
-	log.Printf("[DEBUG] Reading EBS Snapshot: %s", params)
 	resp, err := conn.DescribeSnapshots(params)
 	if err != nil {
 		return err
 	}
 
+	var snapshot *ec2.Snapshot
 	if len(resp.Snapshots) < 1 {
 		return fmt.Errorf("Your query returned no results. Please change your search criteria and try again.")
 	}
 
 	if len(resp.Snapshots) > 1 {
-		if !d.Get("most_recent").(bool) {
-			return fmt.Errorf("Your query returned more than one result. Please try a more " +
-				"specific search criteria, or set `most_recent` attribute to true.")
+		recent := d.Get("most_recent").(bool)
+		log.Printf("[DEBUG] aws_ebs_snapshot - multiple results found and `most_recent` is set to: %t", recent)
+		if recent {
+			snapshot = mostRecentSnapshot(resp.Snapshots)
+		} else {
+			return fmt.Errorf("Your query returned more than one result. Please try a more specific search criteria.")
 		}
-		sort.Slice(resp.Snapshots, func(i, j int) bool {
-			return aws.TimeValue(resp.Snapshots[i].StartTime).Unix() > aws.TimeValue(resp.Snapshots[j].StartTime).Unix()
-		})
+	} else {
+		snapshot = resp.Snapshots[0]
 	}
 
 	//Single Snapshot found so set to state
-	return snapshotDescriptionAttributes(d, resp.Snapshots[0])
+	return snapshotDescriptionAttributes(d, snapshot)
+}
+
+func mostRecentSnapshot(snapshots []*ec2.Snapshot) *ec2.Snapshot {
+	return sortSnapshots(snapshots)[0]
 }
 
 func snapshotDescriptionAttributes(d *schema.ResourceData, snapshot *ec2.Snapshot) error {
@@ -150,6 +154,9 @@ func snapshotDescriptionAttributes(d *schema.ResourceData, snapshot *ec2.Snapsho
 	d.Set("owner_id", snapshot.OwnerId)
 	d.Set("owner_alias", snapshot.OwnerAlias)
 
-	err := d.Set("tags", tagsToMap(snapshot.Tags))
-	return err
+	if err := d.Set("tags", dataSourceTags(snapshot.Tags)); err != nil {
+		return err
+	}
+
+	return nil
 }

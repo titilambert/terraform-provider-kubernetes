@@ -105,8 +105,7 @@ func tagIgnoredELB(t *elb.Tag) bool {
 	filter := []string{"^aws:"}
 	for _, v := range filter {
 		log.Printf("[DEBUG] Matching %v with %v\n", v, *t.Key)
-		r, _ := regexp.MatchString(v, *t.Key)
-		if r {
+		if r, _ := regexp.MatchString(v, *t.Key); r == true {
 			log.Printf("[DEBUG] Found AWS specific tag %s (val: %s), ignoring.\n", *t.Key, *t.Value)
 			return true
 		}

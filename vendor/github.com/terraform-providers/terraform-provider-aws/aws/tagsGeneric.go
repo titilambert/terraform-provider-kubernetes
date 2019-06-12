@@ -60,8 +60,7 @@ func tagIgnoredGeneric(k string) bool {
 	filter := []string{"^aws:"}
 	for _, v := range filter {
 		log.Printf("[DEBUG] Matching %v with %v\n", v, k)
-		r, _ := regexp.MatchString(v, k)
-		if r {
+		if r, _ := regexp.MatchString(v, k); r == true {
 			log.Printf("[DEBUG] Found AWS specific tag %s, ignoring.\n", k)
 			return true
 		}

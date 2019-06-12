@@ -2,11 +2,11 @@ package aws
 
 import (
 	"fmt"
-	"log"
 	"net/url"
 	"strings"
 
 	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/service/iam"
 
 	"github.com/hashicorp/terraform/helper/resource"
@@ -41,11 +41,10 @@ func resourceAwsIamRolePolicy() *schema.Resource {
 				ValidateFunc:  validateIamRolePolicyName,
 			},
 			"name_prefix": {
-				Type:          schema.TypeString,
-				Optional:      true,
-				ForceNew:      true,
-				ConflictsWith: []string{"name"},
-				ValidateFunc:  validateIamRolePolicyNamePrefix,
+				Type:         schema.TypeString,
+				Optional:     true,
+				ForceNew:     true,
+				ValidateFunc: validateIamRolePolicyNamePrefix,
 			},
 			"role": {
 				Type:     schema.TypeString,
@@ -79,7 +78,7 @@ func resourceAwsIamRolePolicyPut(d *schema.ResourceData, meta interface{}) error
 	}
 
 	d.SetId(fmt.Sprintf("%s:%s", *request.RoleName, *request.PolicyName))
-	return resourceAwsIamRolePolicyRead(d, meta)
+	return nil
 }
 
 func resourceAwsIamRolePolicyRead(d *schema.ResourceData, meta interface{}) error {
@@ -97,8 +96,7 @@ func resourceAwsIamRolePolicyRead(d *schema.ResourceData, meta interface{}) erro
 
 	getResp, err := iamconn.GetRolePolicy(request)
 	if err != nil {
-		if isAWSErr(err, iam.ErrCodeNoSuchEntityException, "") {
-			log.Printf("[WARN] IAM Role Policy (%s) for %s not found, removing from state", name, role)
+		if iamerr, ok := err.(awserr.Error); ok && iamerr.Code() == "NoSuchEntity" { // XXX test me
 			d.SetId("")
 			return nil
 		}
@@ -136,9 +134,6 @@ func resourceAwsIamRolePolicyDelete(d *schema.ResourceData, meta interface{}) er
 	}
 
 	if _, err := iamconn.DeleteRolePolicy(request); err != nil {
-		if isAWSErr(err, iam.ErrCodeNoSuchEntityException, "") {
-			return nil
-		}
 		return fmt.Errorf("Error deleting IAM role policy %s: %s", d.Id(), err)
 	}
 	return nil

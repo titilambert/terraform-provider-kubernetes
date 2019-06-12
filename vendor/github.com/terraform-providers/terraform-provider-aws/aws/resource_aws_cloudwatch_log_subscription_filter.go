@@ -21,39 +21,32 @@ func resourceAwsCloudwatchLogSubscriptionFilter() *schema.Resource {
 		Read:   resourceAwsCloudwatchLogSubscriptionFilterRead,
 		Update: resourceAwsCloudwatchLogSubscriptionFilterUpdate,
 		Delete: resourceAwsCloudwatchLogSubscriptionFilterDelete,
-		Importer: &schema.ResourceImporter{
-			State: resourceAwsCloudwatchLogSubscriptionFilterImport,
-		},
 
 		Schema: map[string]*schema.Schema{
-			"name": {
+			"name": &schema.Schema{
 				Type:     schema.TypeString,
 				Required: true,
 				ForceNew: true,
 			},
-			"destination_arn": {
+			"destination_arn": &schema.Schema{
 				Type:     schema.TypeString,
 				Required: true,
 				ForceNew: true,
 			},
-			"filter_pattern": {
+			"filter_pattern": &schema.Schema{
 				Type:     schema.TypeString,
 				Required: true,
 				ForceNew: false,
 			},
-			"log_group_name": {
+			"log_group_name": &schema.Schema{
 				Type:     schema.TypeString,
 				Required: true,
 				ForceNew: true,
 			},
-			"role_arn": {
+			"role_arn": &schema.Schema{
 				Type:     schema.TypeString,
 				Optional: true,
 				Computed: true,
-			},
-			"distribution": {
-				Type:     schema.TypeString,
-				Optional: true,
 			},
 		},
 	}
@@ -101,7 +94,7 @@ func resourceAwsCloudwatchLogSubscriptionFilterUpdate(d *schema.ResourceData, me
 	_, err := conn.PutSubscriptionFilter(&params)
 	if err != nil {
 		if awsErr, ok := err.(awserr.Error); ok {
-			return fmt.Errorf("Error updating SubscriptionFilter (%s) for LogGroup (%s), message: \"%s\", code: \"%s\"",
+			return fmt.Errorf("[WARN] Error updating SubscriptionFilter (%s) for LogGroup (%s), message: \"%s\", code: \"%s\"",
 				d.Get("name").(string), d.Get("log_group_name").(string), awsErr.Message(), awsErr.Code())
 		}
 		return err
@@ -128,10 +121,6 @@ func getAwsCloudWatchLogsSubscriptionFilterInput(d *schema.ResourceData) cloudwa
 		params.RoleArn = aws.String(d.Get("role_arn").(string))
 	}
 
-	if _, ok := d.GetOk("distribution"); ok {
-		params.Distribution = aws.String(d.Get("distribution").(string))
-	}
-
 	return params
 }
 
@@ -148,22 +137,12 @@ func resourceAwsCloudwatchLogSubscriptionFilterRead(d *schema.ResourceData, meta
 
 	resp, err := conn.DescribeSubscriptionFilters(req)
 	if err != nil {
-		if awsErr, ok := err.(awserr.Error); ok && awsErr.Code() == "ResourceNotFoundException" {
-			log.Printf("[WARN] SubscriptionFilters (%q) Not Found", d.Id())
-			d.SetId("")
-			return nil
-		}
 		return fmt.Errorf("Error reading SubscriptionFilters for log group %s with name prefix %s: %#v", log_group_name, d.Get("name").(string), err)
 	}
 
 	for _, subscriptionFilter := range resp.SubscriptionFilters {
-		if aws.StringValue(subscriptionFilter.LogGroupName) == log_group_name {
+		if *subscriptionFilter.LogGroupName == log_group_name {
 			d.SetId(cloudwatchLogsSubscriptionFilterId(log_group_name))
-			d.Set("destination_arn", aws.StringValue(subscriptionFilter.DestinationArn))
-			d.Set("distribution", aws.StringValue(subscriptionFilter.Distribution))
-			d.Set("filter_pattern", aws.StringValue(subscriptionFilter.FilterPattern))
-			d.Set("log_group_name", aws.StringValue(subscriptionFilter.LogGroupName))
-			d.Set("role_arn", aws.StringValue(subscriptionFilter.RoleArn))
 			return nil // OK, matching subscription filter found
 		}
 	}
@@ -185,30 +164,11 @@ func resourceAwsCloudwatchLogSubscriptionFilterDelete(d *schema.ResourceData, me
 	}
 	_, err := conn.DeleteSubscriptionFilter(params)
 	if err != nil {
-		if isAWSErr(err, cloudwatchlogs.ErrCodeResourceNotFoundException, "The specified log group does not exist") {
-			return nil
-		}
 		return fmt.Errorf(
-			"Error deleting Subscription Filter from log group: %s with name filter name %s: %+v", log_group_name, name, err)
+			"Error deleting Subscription Filter from log group: %s with name filter name %s", log_group_name, name)
 	}
-
+	d.SetId("")
 	return nil
-}
-
-func resourceAwsCloudwatchLogSubscriptionFilterImport(d *schema.ResourceData, meta interface{}) ([]*schema.ResourceData, error) {
-	idParts := strings.Split(d.Id(), "|")
-	if len(idParts) < 2 {
-		return nil, fmt.Errorf("unexpected format of ID (%q), expected <log-group-name>|<filter-name>", d.Id())
-	}
-
-	logGroupName := idParts[0]
-	filterNamePrefix := idParts[1]
-
-	d.Set("log_group_name", logGroupName)
-	d.Set("name", filterNamePrefix)
-	d.SetId(cloudwatchLogsSubscriptionFilterId(filterNamePrefix))
-
-	return []*schema.ResourceData{d}, nil
 }
 
 func cloudwatchLogsSubscriptionFilterId(log_group_name string) string {

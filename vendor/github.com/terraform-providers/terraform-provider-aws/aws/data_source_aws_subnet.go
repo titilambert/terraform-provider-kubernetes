@@ -20,12 +20,6 @@ func dataSourceAwsSubnet() *schema.Resource {
 				Computed: true,
 			},
 
-			"availability_zone_id": {
-				Type:     schema.TypeString,
-				Optional: true,
-				Computed: true,
-			},
-
 			"cidr_block": {
 				Type:     schema.TypeString,
 				Optional: true,
@@ -80,16 +74,6 @@ func dataSourceAwsSubnet() *schema.Resource {
 				Type:     schema.TypeString,
 				Computed: true,
 			},
-
-			"arn": {
-				Type:     schema.TypeString,
-				Computed: true,
-			},
-
-			"owner_id": {
-				Type:     schema.TypeString,
-				Computed: true,
-			},
 		},
 	}
 }
@@ -99,7 +83,7 @@ func dataSourceAwsSubnetRead(d *schema.ResourceData, meta interface{}) error {
 
 	req := &ec2.DescribeSubnetsInput{}
 
-	if id, ok := d.GetOk("id"); ok {
+	if id := d.Get("id"); id != "" {
 		req.SubnetIds = []*string{aws.String(id.(string))}
 	}
 
@@ -114,11 +98,10 @@ func dataSourceAwsSubnetRead(d *schema.ResourceData, meta interface{}) error {
 	}
 
 	filters := map[string]string{
-		"availabilityZone":   d.Get("availability_zone").(string),
-		"availabilityZoneId": d.Get("availability_zone_id").(string),
-		"defaultForAz":       defaultForAzStr,
-		"state":              d.Get("state").(string),
-		"vpc-id":             d.Get("vpc_id").(string),
+		"availabilityZone": d.Get("availability_zone").(string),
+		"defaultForAz":     defaultForAzStr,
+		"state":            d.Get("state").(string),
+		"vpc-id":           d.Get("vpc_id").(string),
 	}
 
 	if v, ok := d.GetOk("cidr_block"); ok {
@@ -141,7 +124,7 @@ func dataSourceAwsSubnetRead(d *schema.ResourceData, meta interface{}) error {
 		req.Filters = nil
 	}
 
-	log.Printf("[DEBUG] Reading Subnet: %s", req)
+	log.Printf("[DEBUG] DescribeSubnets %s\n", req)
 	resp, err := conn.DescribeSubnets(req)
 	if err != nil {
 		return err
@@ -156,9 +139,9 @@ func dataSourceAwsSubnetRead(d *schema.ResourceData, meta interface{}) error {
 	subnet := resp.Subnets[0]
 
 	d.SetId(*subnet.SubnetId)
+	d.Set("id", subnet.SubnetId)
 	d.Set("vpc_id", subnet.VpcId)
 	d.Set("availability_zone", subnet.AvailabilityZone)
-	d.Set("availability_zone_id", subnet.AvailabilityZoneId)
 	d.Set("cidr_block", subnet.CidrBlock)
 	d.Set("default_for_az", subnet.DefaultForAz)
 	d.Set("state", subnet.State)
@@ -172,9 +155,6 @@ func dataSourceAwsSubnetRead(d *schema.ResourceData, meta interface{}) error {
 			d.Set("ipv6_cidr_block", a.Ipv6CidrBlock)
 		}
 	}
-
-	d.Set("arn", subnet.SubnetArn)
-	d.Set("owner_id", subnet.OwnerId)
 
 	return nil
 }

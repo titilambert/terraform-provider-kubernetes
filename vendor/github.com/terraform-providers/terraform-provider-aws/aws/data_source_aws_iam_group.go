@@ -2,10 +2,10 @@ package aws
 
 import (
 	"fmt"
-	"log"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/iam"
+	"github.com/hashicorp/errwrap"
 	"github.com/hashicorp/terraform/helper/schema"
 )
 
@@ -43,10 +43,9 @@ func dataSourceAwsIAMGroupRead(d *schema.ResourceData, meta interface{}) error {
 		GroupName: aws.String(groupName),
 	}
 
-	log.Printf("[DEBUG] Reading IAM Group: %s", req)
 	resp, err := iamconn.GetGroup(req)
 	if err != nil {
-		return fmt.Errorf("Error getting group: %s", err)
+		return errwrap.Wrapf("Error getting group: {{err}}", err)
 	}
 	if resp == nil {
 		return fmt.Errorf("no IAM group found")

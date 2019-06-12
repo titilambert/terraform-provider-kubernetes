@@ -20,12 +20,12 @@ func resourceAwsVpnGatewayAttachment() *schema.Resource {
 		Delete: resourceAwsVpnGatewayAttachmentDelete,
 
 		Schema: map[string]*schema.Schema{
-			"vpc_id": {
+			"vpc_id": &schema.Schema{
 				Type:     schema.TypeString,
 				Required: true,
 				ForceNew: true,
 			},
-			"vpn_gateway_id": {
+			"vpn_gateway_id": &schema.Schema{
 				Type:     schema.TypeString,
 				Required: true,
 				ForceNew: true,
@@ -85,7 +85,7 @@ func resourceAwsVpnGatewayAttachmentRead(d *schema.ResourceData, meta interface{
 
 	if err != nil {
 		awsErr, ok := err.(awserr.Error)
-		if ok && awsErr.Code() == "InvalidVpnGatewayID.NotFound" {
+		if ok && awsErr.Code() == "InvalidVPNGatewayID.NotFound" {
 			log.Printf("[WARN] VPN Gateway %q not found.", vgwId)
 			d.SetId("")
 			return nil
@@ -130,9 +130,15 @@ func resourceAwsVpnGatewayAttachmentDelete(d *schema.ResourceData, meta interfac
 		awsErr, ok := err.(awserr.Error)
 		if ok {
 			switch awsErr.Code() {
-			case "InvalidVpnGatewayID.NotFound":
+			case "InvalidVPNGatewayID.NotFound":
+				log.Printf("[WARN] VPN Gateway %q not found.", vgwId)
+				d.SetId("")
 				return nil
 			case "InvalidVpnGatewayAttachment.NotFound":
+				log.Printf(
+					"[WARN] VPN Gateway %q attachment to VPC %q not found.",
+					vgwId, vpcId)
+				d.SetId("")
 				return nil
 			}
 		}
@@ -157,6 +163,7 @@ func resourceAwsVpnGatewayAttachmentDelete(d *schema.ResourceData, meta interfac
 	}
 	log.Printf("[DEBUG] VPN Gateway %q detached from VPC %q.", vgwId, vpcId)
 
+	d.SetId("")
 	return nil
 }
 
@@ -164,7 +171,7 @@ func vpnGatewayAttachmentStateRefresh(conn *ec2.EC2, vpcId, vgwId string) resour
 	return func() (interface{}, string, error) {
 		resp, err := conn.DescribeVpnGateways(&ec2.DescribeVpnGatewaysInput{
 			Filters: []*ec2.Filter{
-				{
+				&ec2.Filter{
 					Name:   aws.String("attachment.vpc-id"),
 					Values: []*string{aws.String(vpcId)},
 				},
@@ -176,7 +183,7 @@ func vpnGatewayAttachmentStateRefresh(conn *ec2.EC2, vpcId, vgwId string) resour
 			awsErr, ok := err.(awserr.Error)
 			if ok {
 				switch awsErr.Code() {
-				case "InvalidVpnGatewayID.NotFound":
+				case "InvalidVPNGatewayID.NotFound":
 					fallthrough
 				case "InvalidVpnGatewayAttachment.NotFound":
 					return nil, "", nil

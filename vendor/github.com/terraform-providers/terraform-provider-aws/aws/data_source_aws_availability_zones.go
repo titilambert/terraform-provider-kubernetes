@@ -9,7 +9,6 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/hashicorp/terraform/helper/schema"
-	"github.com/hashicorp/terraform/helper/validation"
 )
 
 func dataSourceAwsAvailabilityZones() *schema.Resource {
@@ -17,35 +16,15 @@ func dataSourceAwsAvailabilityZones() *schema.Resource {
 		Read: dataSourceAwsAvailabilityZonesRead,
 
 		Schema: map[string]*schema.Schema{
-			"blacklisted_names": {
-				Type:     schema.TypeSet,
-				Optional: true,
-				Elem:     &schema.Schema{Type: schema.TypeString},
-			},
-			"blacklisted_zone_ids": {
-				Type:     schema.TypeSet,
-				Optional: true,
-				Elem:     &schema.Schema{Type: schema.TypeString},
-			},
 			"names": {
 				Type:     schema.TypeList,
 				Computed: true,
 				Elem:     &schema.Schema{Type: schema.TypeString},
 			},
 			"state": {
-				Type:     schema.TypeString,
-				Optional: true,
-				ValidateFunc: validation.StringInSlice([]string{
-					ec2.AvailabilityZoneStateAvailable,
-					ec2.AvailabilityZoneStateInformation,
-					ec2.AvailabilityZoneStateImpaired,
-					ec2.AvailabilityZoneStateUnavailable,
-				}, false),
-			},
-			"zone_ids": {
-				Type:     schema.TypeList,
-				Computed: true,
-				Elem:     &schema.Schema{Type: schema.TypeString},
+				Type:         schema.TypeString,
+				Optional:     true,
+				ValidateFunc: validateStateType,
 			},
 		},
 	}
@@ -68,42 +47,41 @@ func dataSourceAwsAvailabilityZonesRead(d *schema.ResourceData, meta interface{}
 		}
 	}
 
-	log.Printf("[DEBUG] Reading Availability Zones: %s", request)
+	log.Printf("[DEBUG] Availability Zones request options: %#v", *request)
+
 	resp, err := conn.DescribeAvailabilityZones(request)
 	if err != nil {
 		return fmt.Errorf("Error fetching Availability Zones: %s", err)
 	}
 
-	sort.Slice(resp.AvailabilityZones, func(i, j int) bool {
-		return aws.StringValue(resp.AvailabilityZones[i].ZoneName) < aws.StringValue(resp.AvailabilityZones[j].ZoneName)
-	})
-
-	blacklistedNames := d.Get("blacklisted_names").(*schema.Set)
-	blacklistedZoneIDs := d.Get("blacklisted_zone_ids").(*schema.Set)
-	names := []string{}
-	zoneIds := []string{}
-	for _, v := range resp.AvailabilityZones {
-		name := aws.StringValue(v.ZoneName)
-		zoneID := aws.StringValue(v.ZoneId)
-
-		if blacklistedNames.Contains(name) {
-			continue
-		}
-
-		if blacklistedZoneIDs.Contains(zoneID) {
-			continue
-		}
-
-		names = append(names, name)
-		zoneIds = append(zoneIds, zoneID)
+	raw := make([]string, len(resp.AvailabilityZones))
+	for i, v := range resp.AvailabilityZones {
+		raw[i] = *v.ZoneName
 	}
 
-	if err := d.Set("names", names); err != nil {
-		return fmt.Errorf("Error setting Availability Zone names: %s", err)
-	}
-	if err := d.Set("zone_ids", zoneIds); err != nil {
-		return fmt.Errorf("Error setting Availability Zone IDs: %s", err)
+	sort.Strings(raw)
+
+	if err := d.Set("names", raw); err != nil {
+		return fmt.Errorf("[WARN] Error setting Availability Zones: %s", err)
 	}
 
 	return nil
+}
+
+func validateStateType(v interface{}, k string) (ws []string, errors []error) {
+	value := v.(string)
+
+	validState := map[string]bool{
+		"available":   true,
+		"information": true,
+		"impaired":    true,
+		"unavailable": true,
+	}
+
+	if !validState[value] {
+		errors = append(errors, fmt.Errorf(
+			"%q contains an invalid Availability Zone state %q. Valid states are: %q, %q, %q and %q.",
+			k, value, "available", "information", "impaired", "unavailable"))
+	}
+	return
 }

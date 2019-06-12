@@ -1,6 +1,7 @@
 package aws
 
 import (
+	"fmt"
 	"log"
 	"time"
 
@@ -9,7 +10,6 @@ import (
 	"github.com/aws/aws-sdk-go/service/opsworks"
 	"github.com/hashicorp/terraform/helper/resource"
 	"github.com/hashicorp/terraform/helper/schema"
-	"github.com/hashicorp/terraform/helper/validation"
 )
 
 func resourceAwsOpsworksPermission() *schema.Resource {
@@ -20,6 +20,10 @@ func resourceAwsOpsworksPermission() *schema.Resource {
 		Read:   resourceAwsOpsworksPermissionRead,
 
 		Schema: map[string]*schema.Schema{
+			"id": {
+				Type:     schema.TypeString,
+				Computed: true,
+			},
 			"allow_ssh": {
 				Type:     schema.TypeBool,
 				Computed: true,
@@ -34,17 +38,28 @@ func resourceAwsOpsworksPermission() *schema.Resource {
 				Type:     schema.TypeString,
 				Required: true,
 			},
+			// one of deny, show, deploy, manage, iam_only
 			"level": {
 				Type:     schema.TypeString,
 				Computed: true,
 				Optional: true,
-				ValidateFunc: validation.StringInSlice([]string{
-					"deny",
-					"show",
-					"deploy",
-					"manage",
-					"iam_only",
-				}, false),
+				ValidateFunc: func(v interface{}, k string) (ws []string, errors []error) {
+					value := v.(string)
+
+					expected := [5]string{"deny", "show", "deploy", "manage", "iam_only"}
+
+					found := false
+					for _, b := range expected {
+						if b == value {
+							found = true
+						}
+					}
+					if !found {
+						errors = append(errors, fmt.Errorf(
+							"%q has to be one of [deny, show, deploy, manage, iam_only]", k))
+					}
+					return
+				},
 			},
 			"stack_id": {
 				Type:     schema.TypeString,
@@ -89,6 +104,7 @@ func resourceAwsOpsworksPermissionRead(d *schema.ResourceData, meta interface{})
 		if d.Get("user_arn").(string)+d.Get("stack_id").(string) == id {
 			found = true
 			d.SetId(id)
+			d.Set("id", id)
 			d.Set("allow_ssh", permission.AllowSsh)
 			d.Set("allow_sudo", permission.AllowSudo)
 			d.Set("user_arn", permission.IamUserArn)
@@ -98,7 +114,7 @@ func resourceAwsOpsworksPermissionRead(d *schema.ResourceData, meta interface{})
 
 	}
 
-	if !found {
+	if false == found {
 		d.SetId("")
 		log.Printf("[INFO] The correct permission could not be found for: %s on stack: %s", d.Get("user_arn"), d.Get("stack_id"))
 	}

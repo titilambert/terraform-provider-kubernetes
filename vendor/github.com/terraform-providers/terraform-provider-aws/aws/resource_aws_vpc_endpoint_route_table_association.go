@@ -13,9 +13,9 @@ import (
 
 func resourceAwsVpcEndpointRouteTableAssociation() *schema.Resource {
 	return &schema.Resource{
-		Create: resourceAwsVpcEndpointRouteTableAssociationCreate,
-		Read:   resourceAwsVpcEndpointRouteTableAssociationRead,
-		Delete: resourceAwsVpcEndpointRouteTableAssociationDelete,
+		Create: resourceAwsVPCEndpointRouteTableAssociationCreate,
+		Read:   resourceAwsVPCEndpointRouteTableAssociationRead,
+		Delete: resourceAwsVPCEndpointRouteTableAssociationDelete,
 		Importer: &schema.ResourceImporter{
 			State: schema.ImportStatePassthrough,
 		},
@@ -35,40 +35,45 @@ func resourceAwsVpcEndpointRouteTableAssociation() *schema.Resource {
 	}
 }
 
-func resourceAwsVpcEndpointRouteTableAssociationCreate(d *schema.ResourceData, meta interface{}) error {
+func resourceAwsVPCEndpointRouteTableAssociationCreate(d *schema.ResourceData, meta interface{}) error {
 	conn := meta.(*AWSClient).ec2conn
-
 	endpointId := d.Get("vpc_endpoint_id").(string)
 	rtId := d.Get("route_table_id").(string)
 
-	_, err := findResourceVpcEndpoint(conn, endpointId)
+	_, err := findResourceVPCEndpoint(conn, endpointId)
 	if err != nil {
 		return err
 	}
 
-	_, err = conn.ModifyVpcEndpoint(&ec2.ModifyVpcEndpointInput{
+	log.Printf(
+		"[INFO] Creating VPC Endpoint/Route Table association: %s => %s",
+		endpointId, rtId)
+
+	input := &ec2.ModifyVpcEndpointInput{
 		VpcEndpointId:    aws.String(endpointId),
 		AddRouteTableIds: aws.StringSlice([]string{rtId}),
-	})
+	}
+
+	_, err = conn.ModifyVpcEndpoint(input)
 	if err != nil {
 		return fmt.Errorf("Error creating VPC Endpoint/Route Table association: %s", err.Error())
 	}
+	id := vpcEndpointIdRouteTableIdHash(endpointId, rtId)
+	log.Printf("[DEBUG] VPC Endpoint/Route Table association %q created.", id)
 
-	d.SetId(vpcEndpointIdRouteTableIdHash(endpointId, rtId))
+	d.SetId(id)
 
-	return resourceAwsVpcEndpointRouteTableAssociationRead(d, meta)
+	return resourceAwsVPCEndpointRouteTableAssociationRead(d, meta)
 }
 
-func resourceAwsVpcEndpointRouteTableAssociationRead(d *schema.ResourceData, meta interface{}) error {
+func resourceAwsVPCEndpointRouteTableAssociationRead(d *schema.ResourceData, meta interface{}) error {
 	conn := meta.(*AWSClient).ec2conn
-
 	endpointId := d.Get("vpc_endpoint_id").(string)
 	rtId := d.Get("route_table_id").(string)
 
-	vpce, err := findResourceVpcEndpoint(conn, endpointId)
+	vpce, err := findResourceVPCEndpoint(conn, endpointId)
 	if err != nil {
-		if isAWSErr(err, "InvalidVpcEndpointId.NotFound", "") {
-			log.Printf("[WARN] VPC Endpoint (%s) not found, removing VPC Endpoint/Route Table association (%s) from state", endpointId, d.Id())
+		if err, ok := err.(awserr.Error); ok && err.Code() == "InvalidVpcEndpointId.NotFound" {
 			d.SetId("")
 			return nil
 		}
@@ -78,30 +83,35 @@ func resourceAwsVpcEndpointRouteTableAssociationRead(d *schema.ResourceData, met
 
 	found := false
 	for _, id := range vpce.RouteTableIds {
-		if aws.StringValue(id) == rtId {
+		if id != nil && *id == rtId {
 			found = true
 			break
 		}
 	}
 	if !found {
-		log.Printf("[WARN] VPC Endpoint/Route Table association (%s) not found, removing from state", d.Id())
+		// The association no longer exists.
 		d.SetId("")
 		return nil
 	}
 
+	id := vpcEndpointIdRouteTableIdHash(endpointId, rtId)
+	log.Printf("[DEBUG] Computed VPC Endpoint/Route Table ID %s", id)
+	d.SetId(id)
+
 	return nil
 }
 
-func resourceAwsVpcEndpointRouteTableAssociationDelete(d *schema.ResourceData, meta interface{}) error {
+func resourceAwsVPCEndpointRouteTableAssociationDelete(d *schema.ResourceData, meta interface{}) error {
 	conn := meta.(*AWSClient).ec2conn
-
 	endpointId := d.Get("vpc_endpoint_id").(string)
 	rtId := d.Get("route_table_id").(string)
 
-	_, err := conn.ModifyVpcEndpoint(&ec2.ModifyVpcEndpointInput{
+	input := &ec2.ModifyVpcEndpointInput{
 		VpcEndpointId:       aws.String(endpointId),
 		RemoveRouteTableIds: aws.StringSlice([]string{rtId}),
-	})
+	}
+
+	_, err := conn.ModifyVpcEndpoint(input)
 	if err != nil {
 		ec2err, ok := err.(awserr.Error)
 		if !ok {
@@ -120,22 +130,28 @@ func resourceAwsVpcEndpointRouteTableAssociationDelete(d *schema.ResourceData, m
 		}
 	}
 
+	log.Printf("[DEBUG] VPC Endpoint/Route Table association %q deleted", d.Id())
+	d.SetId("")
+
 	return nil
 }
 
-func findResourceVpcEndpoint(conn *ec2.EC2, id string) (*ec2.VpcEndpoint, error) {
-	resp, err := conn.DescribeVpcEndpoints(&ec2.DescribeVpcEndpointsInput{
+func findResourceVPCEndpoint(conn *ec2.EC2, id string) (*ec2.VpcEndpoint, error) {
+	input := &ec2.DescribeVpcEndpointsInput{
 		VpcEndpointIds: aws.StringSlice([]string{id}),
-	})
+	}
+
+	log.Printf("[DEBUG] Reading VPC Endpoint: %q", id)
+	output, err := conn.DescribeVpcEndpoints(input)
 	if err != nil {
 		return nil, err
 	}
 
-	if resp.VpcEndpoints == nil || len(resp.VpcEndpoints) == 0 {
-		return nil, fmt.Errorf("No VPC Endpoints were found for %s", id)
+	if output.VpcEndpoints == nil {
+		return nil, fmt.Errorf("No VPC Endpoints were found for %q", id)
 	}
 
-	return resp.VpcEndpoints[0], nil
+	return output.VpcEndpoints[0], nil
 }
 
 func vpcEndpointIdRouteTableIdHash(endpointId, rtId string) string {

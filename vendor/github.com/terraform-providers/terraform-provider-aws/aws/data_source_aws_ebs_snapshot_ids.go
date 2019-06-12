@@ -2,10 +2,7 @@ package aws
 
 import (
 	"fmt"
-	"log"
-	"sort"
 
-	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/hashicorp/terraform/helper/hashcode"
 	"github.com/hashicorp/terraform/helper/schema"
@@ -29,7 +26,8 @@ func dataSourceAwsEbsSnapshotIds() *schema.Resource {
 				ForceNew: true,
 				Elem:     &schema.Schema{Type: schema.TypeString},
 			},
-			"ids": {
+			"tags": dataSourceTagsSchema(),
+			"ids": &schema.Schema{
 				Type:     schema.TypeList,
 				Computed: true,
 				Elem:     &schema.Schema{Type: schema.TypeString},
@@ -45,7 +43,7 @@ func dataSourceAwsEbsSnapshotIdsRead(d *schema.ResourceData, meta interface{}) e
 	filters, filtersOk := d.GetOk("filter")
 	owners, ownersOk := d.GetOk("owners")
 
-	if restorableUsers == false && !filtersOk && !ownersOk {
+	if restorableUsers == false && filtersOk == false && ownersOk == false {
 		return fmt.Errorf("One of filters, restorable_by_user_ids, or owners must be assigned")
 	}
 
@@ -61,7 +59,6 @@ func dataSourceAwsEbsSnapshotIdsRead(d *schema.ResourceData, meta interface{}) e
 		params.OwnerIds = expandStringList(owners.([]interface{}))
 	}
 
-	log.Printf("[DEBUG] Reading EBS Snapshot IDs: %s", params)
 	resp, err := conn.DescribeSnapshots(params)
 	if err != nil {
 		return err
@@ -69,10 +66,7 @@ func dataSourceAwsEbsSnapshotIdsRead(d *schema.ResourceData, meta interface{}) e
 
 	snapshotIds := make([]string, 0)
 
-	sort.Slice(resp.Snapshots, func(i, j int) bool {
-		return aws.TimeValue(resp.Snapshots[i].StartTime).Unix() > aws.TimeValue(resp.Snapshots[j].StartTime).Unix()
-	})
-	for _, snapshot := range resp.Snapshots {
+	for _, snapshot := range sortSnapshots(resp.Snapshots) {
 		snapshotIds = append(snapshotIds, *snapshot.SnapshotId)
 	}
 

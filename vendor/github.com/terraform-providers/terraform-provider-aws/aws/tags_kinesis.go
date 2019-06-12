@@ -9,9 +9,6 @@ import (
 	"github.com/hashicorp/terraform/helper/schema"
 )
 
-// Kinesis requires tagging operations be split into 10 tag batches
-const kinesisTagBatchLimit = 10
-
 // setTags is a helper to set the tags for a resource. It expects the
 // tags field to be named "tags"
 func setTagsKinesis(conn *kinesis.Kinesis, d *schema.ResourceData) error {
@@ -27,51 +24,34 @@ func setTagsKinesis(conn *kinesis.Kinesis, d *schema.ResourceData) error {
 		// Set tags
 		if len(remove) > 0 {
 			log.Printf("[DEBUG] Removing tags: %#v", remove)
-
-			tagKeysBatch := make([]*string, 0, kinesisTagBatchLimit)
-			tagKeysBatches := make([][]*string, 0, len(remove)/kinesisTagBatchLimit+1)
-			for _, tag := range remove {
-				if len(tagKeysBatch) == kinesisTagBatchLimit {
-					tagKeysBatches = append(tagKeysBatches, tagKeysBatch)
-					tagKeysBatch = make([]*string, 0, kinesisTagBatchLimit)
-				}
-				tagKeysBatch = append(tagKeysBatch, tag.Key)
+			k := make([]*string, len(remove), len(remove))
+			for i, t := range remove {
+				k[i] = t.Key
 			}
-			tagKeysBatches = append(tagKeysBatches, tagKeysBatch)
 
-			for _, tagKeys := range tagKeysBatches {
-				_, err := conn.RemoveTagsFromStream(&kinesis.RemoveTagsFromStreamInput{
-					StreamName: aws.String(sn),
-					TagKeys:    tagKeys,
-				})
-				if err != nil {
-					return err
-				}
+			_, err := conn.RemoveTagsFromStream(&kinesis.RemoveTagsFromStreamInput{
+				StreamName: aws.String(sn),
+				TagKeys:    k,
+			})
+			if err != nil {
+				return err
 			}
 		}
 
 		if len(create) > 0 {
+
 			log.Printf("[DEBUG] Creating tags: %#v", create)
-
-			tagsBatch := make(map[string]*string)
-			tagsBatches := make([]map[string]*string, 0, len(create)/kinesisTagBatchLimit+1)
+			t := make(map[string]*string)
 			for _, tag := range create {
-				if len(tagsBatch) == kinesisTagBatchLimit {
-					tagsBatches = append(tagsBatches, tagsBatch)
-					tagsBatch = make(map[string]*string)
-				}
-				tagsBatch[aws.StringValue(tag.Key)] = tag.Value
+				t[*tag.Key] = tag.Value
 			}
-			tagsBatches = append(tagsBatches, tagsBatch)
 
-			for _, tags := range tagsBatches {
-				_, err := conn.AddTagsToStream(&kinesis.AddTagsToStreamInput{
-					StreamName: aws.String(sn),
-					Tags:       tags,
-				})
-				if err != nil {
-					return err
-				}
+			_, err := conn.AddTagsToStream(&kinesis.AddTagsToStreamInput{
+				StreamName: aws.String(sn),
+				Tags:       t,
+			})
+			if err != nil {
+				return err
 			}
 		}
 	}
@@ -136,8 +116,7 @@ func tagIgnoredKinesis(t *kinesis.Tag) bool {
 	filter := []string{"^aws:"}
 	for _, v := range filter {
 		log.Printf("[DEBUG] Matching %v with %v\n", v, *t.Key)
-		r, _ := regexp.MatchString(v, *t.Key)
-		if r {
+		if r, _ := regexp.MatchString(v, *t.Key); r == true {
 			log.Printf("[DEBUG] Found AWS specific tag %s (val: %s), ignoring.\n", *t.Key, *t.Value)
 			return true
 		}

@@ -3,14 +3,11 @@ package aws
 import (
 	"fmt"
 	"log"
-	"strings"
 
 	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/arn"
 	"github.com/aws/aws-sdk-go/service/ssm"
-	"github.com/hashicorp/terraform/helper/customdiff"
+	"github.com/hashicorp/errwrap"
 	"github.com/hashicorp/terraform/helper/schema"
-	"github.com/hashicorp/terraform/helper/validation"
 )
 
 func resourceAwsSsmParameter() *schema.Resource {
@@ -19,10 +16,6 @@ func resourceAwsSsmParameter() *schema.Resource {
 		Read:   resourceAwsSsmParameterRead,
 		Update: resourceAwsSsmParameterPut,
 		Delete: resourceAwsSsmParameterDelete,
-		Exists: resourceAwsSmmParameterExists,
-		Importer: &schema.ResourceImporter{
-			State: schema.ImportStatePassthrough,
-		},
 
 		Schema: map[string]*schema.Schema{
 			"name": {
@@ -30,78 +23,29 @@ func resourceAwsSsmParameter() *schema.Resource {
 				Required: true,
 				ForceNew: true,
 			},
-			"description": {
-				Type:     schema.TypeString,
-				Optional: true,
-			},
-			"tier": {
-				Type:     schema.TypeString,
-				Optional: true,
-				Default:  ssm.ParameterTierStandard,
-				ValidateFunc: validation.StringInSlice([]string{
-					ssm.ParameterTierStandard,
-					ssm.ParameterTierAdvanced,
-				}, false),
-			},
 			"type": {
-				Type:     schema.TypeString,
-				Required: true,
-				ValidateFunc: validation.StringInSlice([]string{
-					ssm.ParameterTypeString,
-					ssm.ParameterTypeStringList,
-					ssm.ParameterTypeSecureString,
-				}, false),
+				Type:         schema.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: validateSsmParameterType,
 			},
 			"value": {
 				Type:      schema.TypeString,
 				Required:  true,
 				Sensitive: true,
 			},
-			"arn": {
-				Type:     schema.TypeString,
-				Optional: true,
-				Computed: true,
-			},
 			"key_id": {
 				Type:     schema.TypeString,
 				Optional: true,
-				Computed: true,
+				ForceNew: true,
 			},
 			"overwrite": {
 				Type:     schema.TypeBool,
 				Optional: true,
+				Default:  false,
 			},
-			"allowed_pattern": {
-				Type:     schema.TypeString,
-				Optional: true,
-			},
-			"tags": tagsSchema(),
 		},
-
-		CustomizeDiff: customdiff.All(
-			// Prevent the following error during tier update from Advanced to Standard:
-			// ValidationException: This parameter uses the advanced-parameter tier. You can't downgrade a parameter from the advanced-parameter tier to the standard-parameter tier. If necessary, you can delete the advanced parameter and recreate it as a standard parameter.
-			customdiff.ForceNewIfChange("tier", func(old, new, meta interface{}) bool {
-				return old.(string) == ssm.ParameterTierAdvanced && new.(string) == ssm.ParameterTierStandard
-			}),
-		),
 	}
-}
-
-func resourceAwsSmmParameterExists(d *schema.ResourceData, meta interface{}) (bool, error) {
-	ssmconn := meta.(*AWSClient).ssmconn
-	_, err := ssmconn.GetParameter(&ssm.GetParameterInput{
-		Name:           aws.String(d.Id()),
-		WithDecryption: aws.Bool(false),
-	})
-	if err != nil {
-		if isAWSErr(err, ssm.ErrCodeParameterNotFound, "") {
-			return false, nil
-		}
-		return false, err
-	}
-
-	return true, nil
 }
 
 func resourceAwsSsmParameterRead(d *schema.ResourceData, meta interface{}) error {
@@ -109,62 +53,27 @@ func resourceAwsSsmParameterRead(d *schema.ResourceData, meta interface{}) error
 
 	log.Printf("[DEBUG] Reading SSM Parameter: %s", d.Id())
 
-	resp, err := ssmconn.GetParameter(&ssm.GetParameterInput{
-		Name:           aws.String(d.Id()),
+	paramInput := &ssm.GetParametersInput{
+		Names: []*string{
+			aws.String(d.Get("name").(string)),
+		},
 		WithDecryption: aws.Bool(true),
-	})
-	if err != nil {
-		return fmt.Errorf("error getting SSM parameter: %s", err)
 	}
 
-	param := resp.Parameter
+	resp, err := ssmconn.GetParameters(paramInput)
+
+	if err != nil {
+		return errwrap.Wrapf("[ERROR] Error describing SSM parameter: {{err}}", err)
+	}
+
+	if len(resp.InvalidParameters) > 0 {
+		return fmt.Errorf("[ERROR] SSM Parameter %s is invalid", d.Id())
+	}
+
+	param := resp.Parameters[0]
 	d.Set("name", param.Name)
 	d.Set("type", param.Type)
 	d.Set("value", param.Value)
-
-	describeParamsInput := &ssm.DescribeParametersInput{
-		ParameterFilters: []*ssm.ParameterStringFilter{
-			{
-				Key:    aws.String("Name"),
-				Option: aws.String("Equals"),
-				Values: []*string{aws.String(d.Get("name").(string))},
-			},
-		},
-	}
-	describeResp, err := ssmconn.DescribeParameters(describeParamsInput)
-	if err != nil {
-		return fmt.Errorf("error describing SSM parameter: %s", err)
-	}
-
-	if describeResp == nil || len(describeResp.Parameters) == 0 || describeResp.Parameters[0] == nil {
-		log.Printf("[WARN] SSM Parameter %q not found, removing from state", d.Id())
-		d.SetId("")
-		return nil
-	}
-
-	detail := describeResp.Parameters[0]
-	d.Set("key_id", detail.KeyId)
-	d.Set("description", detail.Description)
-	d.Set("tier", detail.Tier)
-	d.Set("allowed_pattern", detail.AllowedPattern)
-
-	if tagList, err := ssmconn.ListTagsForResource(&ssm.ListTagsForResourceInput{
-		ResourceId:   aws.String(d.Get("name").(string)),
-		ResourceType: aws.String("Parameter"),
-	}); err != nil {
-		return fmt.Errorf("Failed to get SSM parameter tags for %s: %s", d.Get("name"), err)
-	} else {
-		d.Set("tags", tagsToMapSSM(tagList.TagList))
-	}
-
-	arn := arn.ARN{
-		Partition: meta.(*AWSClient).partition,
-		Region:    meta.(*AWSClient).region,
-		Service:   "ssm",
-		AccountID: meta.(*AWSClient).accountid,
-		Resource:  fmt.Sprintf("parameter/%s", strings.TrimPrefix(d.Id(), "/")),
-	}
-	d.Set("arn", arn.String())
 
 	return nil
 }
@@ -174,12 +83,16 @@ func resourceAwsSsmParameterDelete(d *schema.ResourceData, meta interface{}) err
 
 	log.Printf("[INFO] Deleting SSM Parameter: %s", d.Id())
 
-	_, err := ssmconn.DeleteParameter(&ssm.DeleteParameterInput{
+	paramInput := &ssm.DeleteParameterInput{
 		Name: aws.String(d.Get("name").(string)),
-	})
-	if err != nil {
-		return fmt.Errorf("error deleting SSM Parameter (%s): %s", d.Id(), err)
 	}
+
+	_, err := ssmconn.DeleteParameter(paramInput)
+	if err != nil {
+		return err
+	}
+
+	d.SetId("")
 
 	return nil
 }
@@ -190,45 +103,24 @@ func resourceAwsSsmParameterPut(d *schema.ResourceData, meta interface{}) error 
 	log.Printf("[INFO] Creating SSM Parameter: %s", d.Get("name").(string))
 
 	paramInput := &ssm.PutParameterInput{
-		Name:           aws.String(d.Get("name").(string)),
-		Type:           aws.String(d.Get("type").(string)),
-		Tier:           aws.String(d.Get("tier").(string)),
-		Value:          aws.String(d.Get("value").(string)),
-		Overwrite:      aws.Bool(shouldUpdateSsmParameter(d)),
-		AllowedPattern: aws.String(d.Get("allowed_pattern").(string)),
+		Name:      aws.String(d.Get("name").(string)),
+		Type:      aws.String(d.Get("type").(string)),
+		Value:     aws.String(d.Get("value").(string)),
+		Overwrite: aws.Bool(d.Get("overwrite").(bool)),
 	}
-
-	if d.HasChange("description") {
-		_, n := d.GetChange("description")
-		paramInput.Description = aws.String(n.(string))
-	}
-
 	if keyID, ok := d.GetOk("key_id"); ok {
-		log.Printf("[DEBUG] Setting key_id for SSM Parameter %v: %s", d.Get("name"), keyID)
+		log.Printf("[DEBUG] Setting key_id for SSM Parameter %s: %s", d.Get("name").(string), keyID.(string))
 		paramInput.SetKeyId(keyID.(string))
 	}
 
-	log.Printf("[DEBUG] Waiting for SSM Parameter %v to be updated", d.Get("name"))
-	if _, err := ssmconn.PutParameter(paramInput); err != nil {
-		return fmt.Errorf("error creating SSM parameter: %s", err)
-	}
+	log.Printf("[DEBUG] Waiting for SSM Parameter %q to be updated", d.Get("name").(string))
+	_, err := ssmconn.PutParameter(paramInput)
 
-	if err := setTagsSSM(ssmconn, d, d.Get("name").(string), "Parameter"); err != nil {
-		return fmt.Errorf("error creating SSM parameter tags: %s", err)
+	if err != nil {
+		return errwrap.Wrapf("[ERROR] Error creating SSM parameter: {{err}}", err)
 	}
 
 	d.SetId(d.Get("name").(string))
 
 	return resourceAwsSsmParameterRead(d, meta)
-}
-
-func shouldUpdateSsmParameter(d *schema.ResourceData) bool {
-	// If the user has specified a preference, return their preference
-	if value, ok := d.GetOkExists("overwrite"); ok {
-		return value.(bool)
-	}
-
-	// Since the user has not specified a preference, obey lifecycle rules
-	// if it is not a new resource, otherwise overwrite should be set to false.
-	return !d.IsNewResource()
 }

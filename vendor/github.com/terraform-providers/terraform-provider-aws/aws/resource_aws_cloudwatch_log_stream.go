@@ -7,6 +7,7 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/cloudwatchlogs"
+	"github.com/hashicorp/errwrap"
 	"github.com/hashicorp/terraform/helper/schema"
 )
 
@@ -47,7 +48,7 @@ func resourceAwsCloudWatchLogStreamCreate(d *schema.ResourceData, meta interface
 		LogStreamName: aws.String(d.Get("name").(string)),
 	})
 	if err != nil {
-		return fmt.Errorf("Creating CloudWatch Log Stream failed: %s", err)
+		return errwrap.Wrapf("Creating CloudWatch Log Stream failed: {{err}}", err)
 	}
 
 	d.SetId(d.Get("name").(string))
@@ -58,16 +59,9 @@ func resourceAwsCloudWatchLogStreamCreate(d *schema.ResourceData, meta interface
 func resourceAwsCloudWatchLogStreamRead(d *schema.ResourceData, meta interface{}) error {
 	conn := meta.(*AWSClient).cloudwatchlogsconn
 
-	group := d.Get("log_group_name").(string)
-
-	ls, exists, err := lookupCloudWatchLogStream(conn, d.Id(), group, nil)
+	ls, exists, err := lookupCloudWatchLogStream(conn, d.Id(), d.Get("log_group_name").(string), nil)
 	if err != nil {
-		if !isAWSErr(err, cloudwatchlogs.ErrCodeResourceNotFoundException, "") {
-			return err
-		}
-
-		log.Printf("[DEBUG] container CloudWatch group %q Not Found.", group)
-		exists = false
+		return err
 	}
 
 	if !exists {
@@ -92,7 +86,7 @@ func resourceAwsCloudWatchLogStreamDelete(d *schema.ResourceData, meta interface
 	}
 	_, err := conn.DeleteLogStream(params)
 	if err != nil {
-		return fmt.Errorf("Error deleting CloudWatch Log Stream: %s", err)
+		return errwrap.Wrapf("Error deleting CloudWatch Log Stream: {{err}}", err)
 	}
 
 	return nil

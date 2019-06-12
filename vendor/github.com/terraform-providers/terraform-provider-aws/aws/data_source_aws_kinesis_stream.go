@@ -11,53 +11,53 @@ func dataSourceAwsKinesisStream() *schema.Resource {
 		Read: dataSourceAwsKinesisStreamRead,
 
 		Schema: map[string]*schema.Schema{
-			"name": {
+			"name": &schema.Schema{
 				Type:     schema.TypeString,
 				Required: true,
 			},
 
-			"arn": {
+			"arn": &schema.Schema{
 				Type:     schema.TypeString,
 				Computed: true,
 			},
 
-			"creation_timestamp": {
+			"creation_timestamp": &schema.Schema{
 				Type:     schema.TypeInt,
 				Computed: true,
 			},
 
-			"status": {
+			"status": &schema.Schema{
 				Type:     schema.TypeString,
 				Computed: true,
 			},
 
-			"retention_period": {
+			"retention_period": &schema.Schema{
 				Type:     schema.TypeInt,
 				Computed: true,
 			},
 
-			"open_shards": {
+			"open_shards": &schema.Schema{
 				Type:     schema.TypeSet,
 				Computed: true,
 				Elem:     &schema.Schema{Type: schema.TypeString},
 				Set:      schema.HashString,
 			},
 
-			"closed_shards": {
+			"closed_shards": &schema.Schema{
 				Type:     schema.TypeSet,
 				Computed: true,
 				Elem:     &schema.Schema{Type: schema.TypeString},
 				Set:      schema.HashString,
 			},
 
-			"shard_level_metrics": {
+			"shard_level_metrics": &schema.Schema{
 				Type:     schema.TypeSet,
 				Computed: true,
 				Elem:     &schema.Schema{Type: schema.TypeString},
 				Set:      schema.HashString,
 			},
 
-			"tags": {
+			"tags": &schema.Schema{
 				Type:     schema.TypeMap,
 				Computed: true,
 			},

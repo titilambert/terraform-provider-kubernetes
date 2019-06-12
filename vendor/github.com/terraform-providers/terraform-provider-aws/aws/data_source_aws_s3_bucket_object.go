@@ -18,84 +18,84 @@ func dataSourceAwsS3BucketObject() *schema.Resource {
 		Read: dataSourceAwsS3BucketObjectRead,
 
 		Schema: map[string]*schema.Schema{
-			"body": {
+			"body": &schema.Schema{
 				Type:     schema.TypeString,
 				Computed: true,
 			},
-			"bucket": {
+			"bucket": &schema.Schema{
 				Type:     schema.TypeString,
 				Required: true,
 			},
-			"cache_control": {
+			"cache_control": &schema.Schema{
 				Type:     schema.TypeString,
 				Computed: true,
 			},
-			"content_disposition": {
+			"content_disposition": &schema.Schema{
 				Type:     schema.TypeString,
 				Computed: true,
 			},
-			"content_encoding": {
+			"content_encoding": &schema.Schema{
 				Type:     schema.TypeString,
 				Computed: true,
 			},
-			"content_language": {
+			"content_language": &schema.Schema{
 				Type:     schema.TypeString,
 				Computed: true,
 			},
-			"content_length": {
+			"content_length": &schema.Schema{
 				Type:     schema.TypeInt,
 				Computed: true,
 			},
-			"content_type": {
+			"content_type": &schema.Schema{
 				Type:     schema.TypeString,
 				Computed: true,
 			},
-			"etag": {
+			"etag": &schema.Schema{
 				Type:     schema.TypeString,
 				Computed: true,
 			},
-			"expiration": {
+			"expiration": &schema.Schema{
 				Type:     schema.TypeString,
 				Computed: true,
 			},
-			"expires": {
+			"expires": &schema.Schema{
 				Type:     schema.TypeString,
 				Computed: true,
 			},
-			"key": {
+			"key": &schema.Schema{
 				Type:     schema.TypeString,
 				Required: true,
 			},
-			"last_modified": {
+			"last_modified": &schema.Schema{
 				Type:     schema.TypeString,
 				Computed: true,
 			},
-			"metadata": {
+			"metadata": &schema.Schema{
 				Type:     schema.TypeMap,
 				Computed: true,
 			},
-			"range": {
+			"range": &schema.Schema{
 				Type:     schema.TypeString,
 				Optional: true,
 			},
-			"server_side_encryption": {
+			"server_side_encryption": &schema.Schema{
 				Type:     schema.TypeString,
 				Computed: true,
 			},
-			"sse_kms_key_id": {
+			"sse_kms_key_id": &schema.Schema{
 				Type:     schema.TypeString,
 				Computed: true,
 			},
-			"storage_class": {
+			"storage_class": &schema.Schema{
 				Type:     schema.TypeString,
 				Computed: true,
 			},
-			"version_id": {
+			"version_id": &schema.Schema{
 				Type:     schema.TypeString,
 				Optional: true,
 				Computed: true,
 			},
-			"website_redirect_location": {
+			"website_redirect_location": &schema.Schema{
 				Type:     schema.TypeString,
 				Computed: true,
 			},
@@ -129,12 +129,12 @@ func dataSourceAwsS3BucketObjectRead(d *schema.ResourceData, meta interface{}) e
 		uniqueId += "@" + v.(string)
 	}
 
-	log.Printf("[DEBUG] Reading S3 Bucket Object: %s", input)
+	log.Printf("[DEBUG] Reading S3 object: %s", input)
 	out, err := conn.HeadObject(&input)
 	if err != nil {
 		return fmt.Errorf("Failed getting S3 object: %s Bucket: %q Object: %q", err, bucket, key)
 	}
-	if out.DeleteMarker != nil && *out.DeleteMarker {
+	if out.DeleteMarker != nil && *out.DeleteMarker == true {
 		return fmt.Errorf("Requested S3 object %q%s has been deleted",
 			bucket+key, versionText)
 	}

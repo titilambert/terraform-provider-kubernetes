@@ -1,7 +1,6 @@
 package aws
 
 import (
-	"fmt"
 	"log"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -89,7 +88,7 @@ func resourceAwsSsmPatchGroupDelete(d *schema.ResourceData, meta interface{}) er
 
 	_, err := ssmconn.DeregisterPatchBaselineForPatchGroup(params)
 	if err != nil {
-		return fmt.Errorf("error deregistering SSM Patch Group (%s): %s", d.Id(), err)
+		return err
 	}
 
 	return nil

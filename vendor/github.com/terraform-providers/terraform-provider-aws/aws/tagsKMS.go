@@ -21,7 +21,7 @@ func setTagsKMS(conn *kms.KMS, d *schema.ResourceData, keyId string) error {
 		// Set tags
 		if len(remove) > 0 {
 			log.Printf("[DEBUG] Removing tags: %#v", remove)
-			k := make([]*string, len(remove))
+			k := make([]*string, len(remove), len(remove))
 			for i, t := range remove {
 				k[i] = t.TagKey
 			}
@@ -106,8 +106,7 @@ func tagIgnoredKMS(t *kms.Tag) bool {
 	filter := []string{"^aws:"}
 	for _, v := range filter {
 		log.Printf("[DEBUG] Matching %v with %v\n", v, *t.TagKey)
-		r, _ := regexp.MatchString(v, *t.TagKey)
-		if r {
+		if r, _ := regexp.MatchString(v, *t.TagKey); r == true {
 			log.Printf("[DEBUG] Found AWS specific tag %s (val: %s), ignoring.\n", *t.TagKey, *t.TagValue)
 			return true
 		}

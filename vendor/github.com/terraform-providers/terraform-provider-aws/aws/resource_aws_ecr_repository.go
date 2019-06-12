@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/service/ecr"
 	"github.com/hashicorp/terraform/helper/resource"
 	"github.com/hashicorp/terraform/helper/schema"
@@ -16,32 +17,26 @@ func resourceAwsEcrRepository() *schema.Resource {
 	return &schema.Resource{
 		Create: resourceAwsEcrRepositoryCreate,
 		Read:   resourceAwsEcrRepositoryRead,
-		Update: resourceAwsEcrRepositoryUpdate,
 		Delete: resourceAwsEcrRepositoryDelete,
 		Importer: &schema.ResourceImporter{
 			State: schema.ImportStatePassthrough,
 		},
 
-		Timeouts: &schema.ResourceTimeout{
-			Delete: schema.DefaultTimeout(20 * time.Minute),
-		},
-
 		Schema: map[string]*schema.Schema{
-			"name": {
+			"name": &schema.Schema{
 				Type:     schema.TypeString,
 				Required: true,
 				ForceNew: true,
 			},
-			"tags": tagsSchema(),
-			"arn": {
+			"arn": &schema.Schema{
 				Type:     schema.TypeString,
 				Computed: true,
 			},
-			"registry_id": {
+			"registry_id": &schema.Schema{
 				Type:     schema.TypeString,
 				Computed: true,
 			},
-			"repository_url": {
+			"repository_url": &schema.Schema{
 				Type:     schema.TypeString,
 				Computed: true,
 			},
@@ -54,20 +49,21 @@ func resourceAwsEcrRepositoryCreate(d *schema.ResourceData, meta interface{}) er
 
 	input := ecr.CreateRepositoryInput{
 		RepositoryName: aws.String(d.Get("name").(string)),
-		Tags:           tagsFromMapECR(d.Get("tags").(map[string]interface{})),
 	}
 
-	log.Printf("[DEBUG] Creating ECR repository: %#v", input)
+	log.Printf("[DEBUG] Creating ECR resository: %s", input)
 	out, err := conn.CreateRepository(&input)
 	if err != nil {
-		return fmt.Errorf("error creating ECR repository: %s", err)
+		return err
 	}
 
 	repository := *out.Repository
 
 	log.Printf("[DEBUG] ECR repository created: %q", *repository.RepositoryArn)
 
-	d.SetId(aws.StringValue(repository.RepositoryName))
+	d.SetId(*repository.RepositoryName)
+	d.Set("arn", repository.RepositoryArn)
+	d.Set("registry_id", repository.RegistryId)
 
 	return resourceAwsEcrRepositoryRead(d, meta)
 }
@@ -75,56 +71,36 @@ func resourceAwsEcrRepositoryCreate(d *schema.ResourceData, meta interface{}) er
 func resourceAwsEcrRepositoryRead(d *schema.ResourceData, meta interface{}) error {
 	conn := meta.(*AWSClient).ecrconn
 
-	log.Printf("[DEBUG] Reading ECR repository %s", d.Id())
-	var out *ecr.DescribeRepositoriesOutput
-	input := &ecr.DescribeRepositoriesInput{
-		RepositoryNames: aws.StringSlice([]string{d.Id()}),
-	}
-
-	err := resource.Retry(1*time.Minute, func() *resource.RetryError {
-		var err error
-		out, err = conn.DescribeRepositories(input)
-		if d.IsNewResource() && isAWSErr(err, ecr.ErrCodeRepositoryNotFoundException, "") {
-			return resource.RetryableError(err)
-		}
-		if err != nil {
-			return resource.NonRetryableError(err)
-		}
-		return nil
+	log.Printf("[DEBUG] Reading repository %s", d.Id())
+	out, err := conn.DescribeRepositories(&ecr.DescribeRepositoriesInput{
+		RepositoryNames: []*string{aws.String(d.Id())},
 	})
-
-	if isAWSErr(err, ecr.ErrCodeRepositoryNotFoundException, "") {
-		log.Printf("[WARN] ECR Repository (%s) not found, removing from state", d.Id())
-		d.SetId("")
-		return nil
-	}
-
 	if err != nil {
-		return fmt.Errorf("error reading ECR repository: %s", err)
+		if ecrerr, ok := err.(awserr.Error); ok && ecrerr.Code() == "RepositoryNotFoundException" {
+			d.SetId("")
+			return nil
+		}
+		return err
 	}
 
 	repository := out.Repositories[0]
 
-	d.Set("arn", repository.RepositoryArn)
-	d.Set("name", repository.RepositoryName)
-	d.Set("registry_id", repository.RegistryId)
-	d.Set("repository_url", repository.RepositoryUri)
+	log.Printf("[DEBUG] Received repository %s", out)
 
-	if err := getTagsECR(conn, d); err != nil {
-		return fmt.Errorf("error getting ECR repository tags: %s", err)
-	}
+	d.SetId(*repository.RepositoryName)
+	d.Set("arn", repository.RepositoryArn)
+	d.Set("registry_id", repository.RegistryId)
+	d.Set("name", repository.RepositoryName)
+
+	repositoryUrl := buildRepositoryUrl(repository, meta.(*AWSClient).region)
+	log.Printf("[INFO] Setting the repository url to be %s", repositoryUrl)
+	d.Set("repository_url", repositoryUrl)
 
 	return nil
 }
 
-func resourceAwsEcrRepositoryUpdate(d *schema.ResourceData, meta interface{}) error {
-	conn := meta.(*AWSClient).ecrconn
-
-	if err := setTagsECR(conn, d); err != nil {
-		return fmt.Errorf("error setting ECR repository tags: %s", err)
-	}
-
-	return resourceAwsEcrRepositoryRead(d, meta)
+func buildRepositoryUrl(repo *ecr.Repository, region string) string {
+	return fmt.Sprintf("%s.dkr.ecr.%s.amazonaws.com/%s", *repo.RegistryId, region, *repo.RepositoryName)
 }
 
 func resourceAwsEcrRepositoryDelete(d *schema.ResourceData, meta interface{}) error {
@@ -136,21 +112,29 @@ func resourceAwsEcrRepositoryDelete(d *schema.ResourceData, meta interface{}) er
 		Force:          aws.Bool(true),
 	})
 	if err != nil {
-		if isAWSErr(err, ecr.ErrCodeRepositoryNotFoundException, "") {
+		if ecrerr, ok := err.(awserr.Error); ok && ecrerr.Code() == "RepositoryNotFoundException" {
+			d.SetId("")
 			return nil
 		}
-		return fmt.Errorf("error deleting ECR repository: %s", err)
+		return err
 	}
 
 	log.Printf("[DEBUG] Waiting for ECR Repository %q to be deleted", d.Id())
-	err = resource.Retry(d.Timeout(schema.TimeoutDelete), func() *resource.RetryError {
+	err = resource.Retry(20*time.Minute, func() *resource.RetryError {
 		_, err := conn.DescribeRepositories(&ecr.DescribeRepositoriesInput{
-			RepositoryNames: aws.StringSlice([]string{d.Id()}),
+			RepositoryNames: []*string{aws.String(d.Id())},
 		})
+
 		if err != nil {
-			if isAWSErr(err, ecr.ErrCodeRepositoryNotFoundException, "") {
+			awsErr, ok := err.(awserr.Error)
+			if !ok {
+				return resource.NonRetryableError(err)
+			}
+
+			if awsErr.Code() == "RepositoryNotFoundException" {
 				return nil
 			}
+
 			return resource.NonRetryableError(err)
 		}
 
@@ -158,9 +142,10 @@ func resourceAwsEcrRepositoryDelete(d *schema.ResourceData, meta interface{}) er
 			fmt.Errorf("%q: Timeout while waiting for the ECR Repository to be deleted", d.Id()))
 	})
 	if err != nil {
-		return fmt.Errorf("error deleting ECR repository: %s", err)
+		return err
 	}
 
+	d.SetId("")
 	log.Printf("[DEBUG] repository %q deleted.", d.Get("name").(string))
 
 	return nil

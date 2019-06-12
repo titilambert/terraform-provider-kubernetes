@@ -6,13 +6,12 @@ import (
 	"log"
 	"regexp"
 
+	"github.com/hashicorp/errwrap"
 	"github.com/hashicorp/terraform/helper/schema"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/service/glacier"
-	"github.com/hashicorp/terraform/helper/structure"
-	"github.com/hashicorp/terraform/helper/validation"
 )
 
 func resourceAwsGlacierVault() *schema.Resource {
@@ -27,7 +26,7 @@ func resourceAwsGlacierVault() *schema.Resource {
 		},
 
 		Schema: map[string]*schema.Schema{
-			"name": {
+			"name": &schema.Schema{
 				Type:     schema.TypeString,
 				Required: true,
 				ForceNew: true,
@@ -45,38 +44,38 @@ func resourceAwsGlacierVault() *schema.Resource {
 				},
 			},
 
-			"location": {
+			"location": &schema.Schema{
 				Type:     schema.TypeString,
 				Computed: true,
 			},
 
-			"arn": {
+			"arn": &schema.Schema{
 				Type:     schema.TypeString,
 				Computed: true,
 			},
 
-			"access_policy": {
+			"access_policy": &schema.Schema{
 				Type:         schema.TypeString,
 				Optional:     true,
-				ValidateFunc: validation.ValidateJsonString,
+				ValidateFunc: validateJsonString,
 				StateFunc: func(v interface{}) string {
-					json, _ := structure.NormalizeJsonString(v)
+					json, _ := normalizeJsonString(v)
 					return json
 				},
 			},
 
-			"notification": {
+			"notification": &schema.Schema{
 				Type:     schema.TypeList,
 				Optional: true,
 				Elem: &schema.Resource{
 					Schema: map[string]*schema.Schema{
-						"events": {
+						"events": &schema.Schema{
 							Type:     schema.TypeSet,
 							Required: true,
 							Elem:     &schema.Schema{Type: schema.TypeString},
 							Set:      schema.HashString,
 						},
-						"sns_topic": {
+						"sns_topic": &schema.Schema{
 							Type:     schema.TypeString,
 							Required: true,
 						},
@@ -165,9 +164,9 @@ func resourceAwsGlacierVaultRead(d *schema.ResourceData, meta interface{}) error
 	if awserr, ok := err.(awserr.Error); ok && awserr.Code() == "ResourceNotFoundException" {
 		d.Set("access_policy", "")
 	} else if pol != nil {
-		policy, err := structure.NormalizeJsonString(*pol.Policy.Policy)
+		policy, err := normalizeJsonString(*pol.Policy.Policy)
 		if err != nil {
-			return fmt.Errorf("access policy contains an invalid JSON: %s", err)
+			return errwrap.Wrapf("access policy contains an invalid JSON: {{err}}", err)
 		}
 		d.Set("access_policy", policy)
 	} else {
@@ -406,7 +405,7 @@ func getGlacierVaultNotification(glacierconn *glacier.Glacier, vaultName string)
 		return nil, fmt.Errorf("Error reading Glacier Vault Notifications: %s", err.Error())
 	}
 
-	notifications := make(map[string]interface{})
+	notifications := make(map[string]interface{}, 0)
 
 	log.Print("[DEBUG] Flattening Glacier Vault Notifications")
 

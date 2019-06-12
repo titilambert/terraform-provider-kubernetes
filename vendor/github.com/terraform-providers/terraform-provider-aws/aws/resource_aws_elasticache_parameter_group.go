@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"log"
-	"strings"
 	"time"
 
 	"github.com/hashicorp/terraform/helper/hashcode"
@@ -26,35 +25,32 @@ func resourceAwsElasticacheParameterGroup() *schema.Resource {
 			State: schema.ImportStatePassthrough,
 		},
 		Schema: map[string]*schema.Schema{
-			"name": {
+			"name": &schema.Schema{
 				Type:     schema.TypeString,
 				ForceNew: true,
 				Required: true,
-				StateFunc: func(val interface{}) string {
-					return strings.ToLower(val.(string))
-				},
 			},
-			"family": {
+			"family": &schema.Schema{
 				Type:     schema.TypeString,
 				Required: true,
 				ForceNew: true,
 			},
-			"description": {
+			"description": &schema.Schema{
 				Type:     schema.TypeString,
 				Optional: true,
 				ForceNew: true,
 				Default:  "Managed by Terraform",
 			},
-			"parameter": {
+			"parameter": &schema.Schema{
 				Type:     schema.TypeSet,
 				Optional: true,
 				Elem: &schema.Resource{
 					Schema: map[string]*schema.Schema{
-						"name": {
+						"name": &schema.Schema{
 							Type:     schema.TypeString,
 							Required: true,
 						},
-						"value": {
+						"value": &schema.Schema{
 							Type:     schema.TypeString,
 							Required: true,
 						},
@@ -76,7 +72,7 @@ func resourceAwsElasticacheParameterGroupCreate(d *schema.ResourceData, meta int
 	}
 
 	log.Printf("[DEBUG] Create Cache Parameter Group: %#v", createOpts)
-	resp, err := conn.CreateCacheParameterGroup(&createOpts)
+	_, err := conn.CreateCacheParameterGroup(&createOpts)
 	if err != nil {
 		return fmt.Errorf("Error creating Cache Parameter Group: %s", err)
 	}
@@ -87,7 +83,7 @@ func resourceAwsElasticacheParameterGroupCreate(d *schema.ResourceData, meta int
 	d.SetPartial("description")
 	d.Partial(false)
 
-	d.SetId(*resp.CacheParameterGroup.CacheParameterGroupName)
+	d.SetId(*createOpts.CacheParameterGroupName)
 	log.Printf("[INFO] Cache Parameter Group ID: %s", d.Id())
 
 	return resourceAwsElasticacheParameterGroupUpdate(d, meta)
@@ -166,7 +162,7 @@ func resourceAwsElasticacheParameterGroupUpdate(d *schema.ResourceData, meta int
 		maxParams := 20
 
 		for len(toRemove) > 0 {
-			var paramsToModify []*elasticache.ParameterNameValue
+			paramsToModify := make([]*elasticache.ParameterNameValue, 0)
 			if len(toRemove) <= maxParams {
 				paramsToModify, toRemove = toRemove[:], nil
 			} else {
@@ -178,118 +174,14 @@ func resourceAwsElasticacheParameterGroupUpdate(d *schema.ResourceData, meta int
 			}
 
 			log.Printf("[DEBUG] Reset Cache Parameter Group: %s", resetOpts)
-			err := resource.Retry(30*time.Second, func() *resource.RetryError {
-				_, err = conn.ResetCacheParameterGroup(&resetOpts)
-				if err != nil {
-					if isAWSErr(err, "InvalidCacheParameterGroupState", " has pending changes") {
-						return resource.RetryableError(err)
-					}
-					return resource.NonRetryableError(err)
-				}
-				return nil
-			})
-
-			// When attempting to reset the reserved-memory parameter, the API
-			// can return the below 500 error, which causes the AWS Go SDK to
-			// automatically retry and hence timeout resource.Retry():
-			//   InternalFailure: An internal error has occurred. Please try your query again at a later time.
-			// Instead of hardcoding the reserved-memory parameter removal
-			// above, which may become out of date, here we add logic to
-			// workaround this API behavior
-
-			if isResourceTimeoutError(err) {
-				for i, paramToModify := range paramsToModify {
-					if aws.StringValue(paramToModify.ParameterName) != "reserved-memory" {
-						continue
-					}
-
-					// Always reset the top level error and remove the reset for reserved-memory
-					err = nil
-					paramsToModify = append(paramsToModify[:i], paramsToModify[i+1:]...)
-
-					// If we are only trying to remove reserved-memory and not perform
-					// an update to reserved-memory or reserved-memory-percentage, we
-					// can attempt to workaround the API issue by switching it to
-					// reserved-memory-percentage first then reset that temporary parameter.
-
-					tryReservedMemoryPercentageWorkaround := true
-
-					allConfiguredParameters, err := expandElastiCacheParameters(d.Get("parameter").(*schema.Set).List())
-					if err != nil {
-						return fmt.Errorf("error expanding parameter configuration: %s", err)
-					}
-
-					for _, configuredParameter := range allConfiguredParameters {
-						if aws.StringValue(configuredParameter.ParameterName) == "reserved-memory" || aws.StringValue(configuredParameter.ParameterName) == "reserved-memory-percentage" {
-							tryReservedMemoryPercentageWorkaround = false
-							break
-						}
-					}
-
-					if !tryReservedMemoryPercentageWorkaround {
-						break
-					}
-
-					// The reserved-memory-percentage parameter does not exist in redis2.6 and redis2.8
-					family := d.Get("family").(string)
-					if family == "redis2.6" || family == "redis2.8" {
-						log.Printf("[WARN] Cannot reset Elasticache Parameter Group (%s) reserved-memory parameter with %s family", d.Id(), family)
-						break
-					}
-
-					modifyInput := &elasticache.ModifyCacheParameterGroupInput{
-						CacheParameterGroupName: aws.String(d.Get("name").(string)),
-						ParameterNameValues: []*elasticache.ParameterNameValue{
-							{
-								ParameterName:  aws.String("reserved-memory-percentage"),
-								ParameterValue: aws.String("0"),
-							},
-						},
-					}
-					_, err = conn.ModifyCacheParameterGroup(modifyInput)
-
-					if err != nil {
-						log.Printf("[WARN] Error attempting reserved-memory workaround to switch to reserved-memory-percentage: %s", err)
-						break
-					}
-
-					resetInput := &elasticache.ResetCacheParameterGroupInput{
-						CacheParameterGroupName: aws.String(d.Get("name").(string)),
-						ParameterNameValues: []*elasticache.ParameterNameValue{
-							{
-								ParameterName:  aws.String("reserved-memory-percentage"),
-								ParameterValue: aws.String("0"),
-							},
-						},
-					}
-
-					_, err = conn.ResetCacheParameterGroup(resetInput)
-
-					if err != nil {
-						log.Printf("[WARN] Error attempting reserved-memory workaround to reset reserved-memory-percentage: %s", err)
-					}
-
-					break
-				}
-
-				// Retry any remaining parameter resets with reserved-memory potentially removed
-				if len(paramsToModify) > 0 {
-					resetOpts = elasticache.ResetCacheParameterGroupInput{
-						CacheParameterGroupName: aws.String(d.Get("name").(string)),
-						ParameterNameValues:     paramsToModify,
-					}
-					// Reset top level error with potentially any new errors
-					_, err = conn.ResetCacheParameterGroup(&resetOpts)
-				}
-			}
-
+			_, err = conn.ResetCacheParameterGroup(&resetOpts)
 			if err != nil {
 				return fmt.Errorf("Error resetting Cache Parameter Group: %s", err)
 			}
 		}
 
 		for len(toAdd) > 0 {
-			var paramsToModify []*elasticache.ParameterNameValue
+			paramsToModify := make([]*elasticache.ParameterNameValue, 0)
 			if len(toAdd) <= maxParams {
 				paramsToModify, toAdd = toAdd[:], nil
 			} else {
@@ -326,6 +218,7 @@ func resourceAwsElasticacheParameterGroupDelete(d *schema.ResourceData, meta int
 		if err != nil {
 			awsErr, ok := err.(awserr.Error)
 			if ok && awsErr.Code() == "CacheParameterGroupNotFoundFault" {
+				d.SetId("")
 				return nil
 			}
 			if ok && awsErr.Code() == "InvalidCacheParameterGroupState" {

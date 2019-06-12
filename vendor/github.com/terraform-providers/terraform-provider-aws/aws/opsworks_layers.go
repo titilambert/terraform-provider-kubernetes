@@ -11,7 +11,6 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/service/opsworks"
-	"github.com/hashicorp/terraform/helper/structure"
 )
 
 // OpsWorks has a single concept of "layer" which represents several different
@@ -46,151 +45,153 @@ var (
 
 func (lt *opsworksLayerType) SchemaResource() *schema.Resource {
 	resourceSchema := map[string]*schema.Schema{
-		"auto_assign_elastic_ips": {
+		"id": &schema.Schema{
+			Type:     schema.TypeString,
+			Computed: true,
+		},
+
+		"auto_assign_elastic_ips": &schema.Schema{
 			Type:     schema.TypeBool,
 			Optional: true,
 			Default:  false,
 		},
 
-		"auto_assign_public_ips": {
+		"auto_assign_public_ips": &schema.Schema{
 			Type:     schema.TypeBool,
 			Optional: true,
 			Default:  false,
 		},
 
-		"custom_instance_profile_arn": {
+		"custom_instance_profile_arn": &schema.Schema{
 			Type:     schema.TypeString,
 			Optional: true,
 		},
 
-		"elastic_load_balancer": {
+		"elastic_load_balancer": &schema.Schema{
 			Type:     schema.TypeString,
 			Optional: true,
 		},
 
-		"custom_setup_recipes": {
+		"custom_setup_recipes": &schema.Schema{
 			Type:     schema.TypeList,
 			Optional: true,
 			Elem:     &schema.Schema{Type: schema.TypeString},
 		},
 
-		"custom_configure_recipes": {
+		"custom_configure_recipes": &schema.Schema{
 			Type:     schema.TypeList,
 			Optional: true,
 			Elem:     &schema.Schema{Type: schema.TypeString},
 		},
 
-		"custom_deploy_recipes": {
+		"custom_deploy_recipes": &schema.Schema{
 			Type:     schema.TypeList,
 			Optional: true,
 			Elem:     &schema.Schema{Type: schema.TypeString},
 		},
 
-		"custom_undeploy_recipes": {
+		"custom_undeploy_recipes": &schema.Schema{
 			Type:     schema.TypeList,
 			Optional: true,
 			Elem:     &schema.Schema{Type: schema.TypeString},
 		},
 
-		"custom_shutdown_recipes": {
+		"custom_shutdown_recipes": &schema.Schema{
 			Type:     schema.TypeList,
 			Optional: true,
 			Elem:     &schema.Schema{Type: schema.TypeString},
 		},
 
-		"custom_security_group_ids": {
+		"custom_security_group_ids": &schema.Schema{
 			Type:     schema.TypeSet,
 			Optional: true,
 			Elem:     &schema.Schema{Type: schema.TypeString},
 			Set:      schema.HashString,
 		},
 
-		"custom_json": {
-			Type: schema.TypeString,
-			StateFunc: func(v interface{}) string {
-				json, _ := structure.NormalizeJsonString(v)
-				return json
-			},
-			Optional: true,
+		"custom_json": &schema.Schema{
+			Type:      schema.TypeString,
+			StateFunc: normalizeJson,
+			Optional:  true,
 		},
 
-		"auto_healing": {
+		"auto_healing": &schema.Schema{
 			Type:     schema.TypeBool,
 			Optional: true,
 			Default:  true,
 		},
 
-		"install_updates_on_boot": {
+		"install_updates_on_boot": &schema.Schema{
 			Type:     schema.TypeBool,
 			Optional: true,
 			Default:  true,
 		},
 
-		"instance_shutdown_timeout": {
+		"instance_shutdown_timeout": &schema.Schema{
 			Type:     schema.TypeInt,
 			Optional: true,
 			Default:  120,
 		},
 
-		"drain_elb_on_shutdown": {
+		"drain_elb_on_shutdown": &schema.Schema{
 			Type:     schema.TypeBool,
 			Optional: true,
 			Default:  true,
 		},
 
-		"system_packages": {
+		"system_packages": &schema.Schema{
 			Type:     schema.TypeSet,
 			Optional: true,
 			Elem:     &schema.Schema{Type: schema.TypeString},
 			Set:      schema.HashString,
 		},
 
-		"stack_id": {
+		"stack_id": &schema.Schema{
 			Type:     schema.TypeString,
 			ForceNew: true,
 			Required: true,
 		},
 
-		"use_ebs_optimized_instances": {
+		"use_ebs_optimized_instances": &schema.Schema{
 			Type:     schema.TypeBool,
 			Optional: true,
 			Default:  false,
 		},
 
-		"ebs_volume": {
+		"ebs_volume": &schema.Schema{
 			Type:     schema.TypeSet,
 			Optional: true,
 			Elem: &schema.Resource{
 				Schema: map[string]*schema.Schema{
 
-					"iops": {
+					"iops": &schema.Schema{
 						Type:     schema.TypeInt,
 						Optional: true,
 						Default:  0,
 					},
 
-					"mount_point": {
+					"mount_point": &schema.Schema{
 						Type:     schema.TypeString,
 						Required: true,
 					},
 
-					"number_of_disks": {
+					"number_of_disks": &schema.Schema{
 						Type:     schema.TypeInt,
 						Required: true,
 					},
 
-					"raid_level": {
+					"raid_level": &schema.Schema{
 						Type:     schema.TypeString,
 						Optional: true,
 						Default:  "",
 					},
 
-					"size": {
+					"size": &schema.Schema{
 						Type:     schema.TypeInt,
 						Required: true,
 					},
 
-					"type": {
+					"type": &schema.Schema{
 						Type:     schema.TypeString,
 						Optional: true,
 						Default:  "standard",
@@ -280,7 +281,7 @@ func (lt *opsworksLayerType) Read(d *schema.ResourceData, client *opsworks.OpsWo
 	}
 
 	layer := resp.Layers[0]
-	d.SetId(aws.StringValue(layer.LayerId))
+	d.Set("id", layer.LayerId)
 	d.Set("auto_assign_elastic_ips", layer.AutoAssignElasticIps)
 	d.Set("auto_assign_public_ips", layer.AutoAssignPublicIps)
 	d.Set("custom_instance_profile_arn", layer.CustomInstanceProfileArn)
@@ -296,14 +297,12 @@ func (lt *opsworksLayerType) Read(d *schema.ResourceData, client *opsworks.OpsWo
 		d.Set("short_name", layer.Shortname)
 	}
 
-	if layer.CustomJson == nil {
-		d.Set("custom_json", "")
-	} else {
-		policy, err := structure.NormalizeJsonString(*layer.CustomJson)
-		if err != nil {
-			return fmt.Errorf("policy contains an invalid JSON: %s", err)
+	if v := layer.CustomJson; v == nil {
+		if err := d.Set("custom_json", ""); err != nil {
+			return err
 		}
-		d.Set("custom_json", policy)
+	} else if err := d.Set("custom_json", normalizeJson(*v)); err != nil {
+		return err
 	}
 
 	lt.SetAttributeMap(d, layer.Attributes)
@@ -345,13 +344,13 @@ func (lt *opsworksLayerType) Create(d *schema.ResourceData, client *opsworks.Ops
 		EnableAutoHealing:           aws.Bool(d.Get("auto_healing").(bool)),
 		InstallUpdatesOnBoot:        aws.Bool(d.Get("install_updates_on_boot").(bool)),
 		LifecycleEventConfiguration: lt.LifecycleEventConfiguration(d),
-		Name:                        aws.String(d.Get("name").(string)),
-		Packages:                    expandStringSet(d.Get("system_packages").(*schema.Set)),
-		Type:                        aws.String(lt.TypeName),
-		StackId:                     aws.String(d.Get("stack_id").(string)),
-		UseEbsOptimizedInstances:    aws.Bool(d.Get("use_ebs_optimized_instances").(bool)),
-		Attributes:                  lt.AttributeMap(d),
-		VolumeConfigurations:        lt.VolumeConfigurations(d),
+		Name:                     aws.String(d.Get("name").(string)),
+		Packages:                 expandStringSet(d.Get("system_packages").(*schema.Set)),
+		Type:                     aws.String(lt.TypeName),
+		StackId:                  aws.String(d.Get("stack_id").(string)),
+		UseEbsOptimizedInstances: aws.Bool(d.Get("use_ebs_optimized_instances").(bool)),
+		Attributes:               lt.AttributeMap(d),
+		VolumeConfigurations:     lt.VolumeConfigurations(d),
 	}
 
 	if lt.CustomShortName {
@@ -371,6 +370,7 @@ func (lt *opsworksLayerType) Create(d *schema.ResourceData, client *opsworks.Ops
 
 	layerId := *resp.LayerId
 	d.SetId(layerId)
+	d.Set("id", layerId)
 
 	loadBalancer := aws.String(d.Get("elastic_load_balancer").(string))
 	if loadBalancer != nil && *loadBalancer != "" {
@@ -399,11 +399,11 @@ func (lt *opsworksLayerType) Update(d *schema.ResourceData, client *opsworks.Ops
 		EnableAutoHealing:           aws.Bool(d.Get("auto_healing").(bool)),
 		InstallUpdatesOnBoot:        aws.Bool(d.Get("install_updates_on_boot").(bool)),
 		LifecycleEventConfiguration: lt.LifecycleEventConfiguration(d),
-		Name:                        aws.String(d.Get("name").(string)),
-		Packages:                    expandStringSet(d.Get("system_packages").(*schema.Set)),
-		UseEbsOptimizedInstances:    aws.Bool(d.Get("use_ebs_optimized_instances").(bool)),
-		Attributes:                  lt.AttributeMap(d),
-		VolumeConfigurations:        lt.VolumeConfigurations(d),
+		Name:                     aws.String(d.Get("name").(string)),
+		Packages:                 expandStringSet(d.Get("system_packages").(*schema.Set)),
+		UseEbsOptimizedInstances: aws.Bool(d.Get("use_ebs_optimized_instances").(bool)),
+		Attributes:               lt.AttributeMap(d),
+		VolumeConfigurations:     lt.VolumeConfigurations(d),
 	}
 
 	if lt.CustomShortName {

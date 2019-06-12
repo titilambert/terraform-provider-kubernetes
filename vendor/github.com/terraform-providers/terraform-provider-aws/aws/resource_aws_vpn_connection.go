@@ -5,16 +5,14 @@ import (
 	"encoding/xml"
 	"fmt"
 	"log"
-	"net"
-	"regexp"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/service/ec2"
 
+	"github.com/hashicorp/errwrap"
 	"github.com/hashicorp/terraform/helper/hashcode"
 	"github.com/hashicorp/terraform/helper/resource"
 	"github.com/hashicorp/terraform/helper/schema"
@@ -72,28 +70,15 @@ func resourceAwsVpnConnection() *schema.Resource {
 
 		Schema: map[string]*schema.Schema{
 			"vpn_gateway_id": {
-				Type:          schema.TypeString,
-				Optional:      true,
-				ForceNew:      true,
-				ConflictsWith: []string{"transit_gateway_id"},
+				Type:     schema.TypeString,
+				Required: true,
+				ForceNew: true,
 			},
 
 			"customer_gateway_id": {
 				Type:     schema.TypeString,
 				Required: true,
 				ForceNew: true,
-			},
-
-			"transit_gateway_attachment_id": {
-				Type:     schema.TypeString,
-				Computed: true,
-			},
-
-			"transit_gateway_id": {
-				Type:          schema.TypeString,
-				Optional:      true,
-				ForceNew:      true,
-				ConflictsWith: []string{"vpn_gateway_id"},
 			},
 
 			"type": {
@@ -109,57 +94,31 @@ func resourceAwsVpnConnection() *schema.Resource {
 				ForceNew: true,
 			},
 
-			"tunnel1_inside_cidr": {
-				Type:         schema.TypeString,
-				Optional:     true,
-				Computed:     true,
-				ForceNew:     true,
-				ValidateFunc: validateVpnConnectionTunnelInsideCIDR,
-			},
-
-			"tunnel1_preshared_key": {
-				Type:         schema.TypeString,
-				Optional:     true,
-				Sensitive:    true,
-				Computed:     true,
-				ForceNew:     true,
-				ValidateFunc: validateVpnConnectionTunnelPreSharedKey,
-			},
-
-			"tunnel2_inside_cidr": {
-				Type:         schema.TypeString,
-				Optional:     true,
-				Computed:     true,
-				ForceNew:     true,
-				ValidateFunc: validateVpnConnectionTunnelInsideCIDR,
-			},
-
-			"tunnel2_preshared_key": {
-				Type:         schema.TypeString,
-				Optional:     true,
-				Sensitive:    true,
-				Computed:     true,
-				ForceNew:     true,
-				ValidateFunc: validateVpnConnectionTunnelPreSharedKey,
-			},
-
 			"tags": tagsSchema(),
 
 			// Begin read only attributes
 			"customer_gateway_configuration": {
 				Type:     schema.TypeString,
 				Computed: true,
+				Optional: true,
 			},
 
 			"tunnel1_address": {
 				Type:     schema.TypeString,
 				Computed: true,
 			},
+
 			"tunnel1_cgw_inside_address": {
 				Type:     schema.TypeString,
 				Computed: true,
 			},
+
 			"tunnel1_vgw_inside_address": {
+				Type:     schema.TypeString,
+				Computed: true,
+			},
+
+			"tunnel1_preshared_key": {
 				Type:     schema.TypeString,
 				Computed: true,
 			},
@@ -171,16 +130,22 @@ func resourceAwsVpnConnection() *schema.Resource {
 				Type:     schema.TypeInt,
 				Computed: true,
 			},
-
 			"tunnel2_address": {
 				Type:     schema.TypeString,
 				Computed: true,
 			},
+
 			"tunnel2_cgw_inside_address": {
 				Type:     schema.TypeString,
 				Computed: true,
 			},
+
 			"tunnel2_vgw_inside_address": {
+				Type:     schema.TypeString,
+				Computed: true,
+			},
+
+			"tunnel2_preshared_key": {
 				Type:     schema.TypeString,
 				Computed: true,
 			},
@@ -192,25 +157,28 @@ func resourceAwsVpnConnection() *schema.Resource {
 				Type:     schema.TypeInt,
 				Computed: true,
 			},
-
 			"routes": {
 				Type:     schema.TypeSet,
 				Computed: true,
+				Optional: true,
 				Elem: &schema.Resource{
 					Schema: map[string]*schema.Schema{
 						"destination_cidr_block": {
 							Type:     schema.TypeString,
 							Computed: true,
+							Optional: true,
 						},
 
 						"source": {
 							Type:     schema.TypeString,
 							Computed: true,
+							Optional: true,
 						},
 
 						"state": {
 							Type:     schema.TypeString,
 							Computed: true,
+							Optional: true,
 						},
 					},
 				},
@@ -227,31 +195,37 @@ func resourceAwsVpnConnection() *schema.Resource {
 			"vgw_telemetry": {
 				Type:     schema.TypeSet,
 				Computed: true,
+				Optional: true,
 				Elem: &schema.Resource{
 					Schema: map[string]*schema.Schema{
 						"accepted_route_count": {
 							Type:     schema.TypeInt,
 							Computed: true,
+							Optional: true,
 						},
 
 						"last_status_change": {
 							Type:     schema.TypeString,
 							Computed: true,
+							Optional: true,
 						},
 
 						"outside_ip_address": {
 							Type:     schema.TypeString,
 							Computed: true,
+							Optional: true,
 						},
 
 						"status": {
 							Type:     schema.TypeString,
 							Computed: true,
+							Optional: true,
 						},
 
 						"status_message": {
 							Type:     schema.TypeString,
 							Computed: true,
+							Optional: true,
 						},
 					},
 				},
@@ -269,44 +243,15 @@ func resourceAwsVpnConnection() *schema.Resource {
 func resourceAwsVpnConnectionCreate(d *schema.ResourceData, meta interface{}) error {
 	conn := meta.(*AWSClient).ec2conn
 
-	// Fill the tunnel options for the EC2 API
-	options := []*ec2.VpnTunnelOptionsSpecification{
-		{}, {},
-	}
-
-	if v, ok := d.GetOk("tunnel1_inside_cidr"); ok {
-		options[0].TunnelInsideCidr = aws.String(v.(string))
-	}
-
-	if v, ok := d.GetOk("tunnel2_inside_cidr"); ok {
-		options[1].TunnelInsideCidr = aws.String(v.(string))
-	}
-
-	if v, ok := d.GetOk("tunnel1_preshared_key"); ok {
-		options[0].PreSharedKey = aws.String(v.(string))
-	}
-
-	if v, ok := d.GetOk("tunnel2_preshared_key"); ok {
-		options[1].PreSharedKey = aws.String(v.(string))
-	}
-
 	connectOpts := &ec2.VpnConnectionOptionsSpecification{
 		StaticRoutesOnly: aws.Bool(d.Get("static_routes_only").(bool)),
-		TunnelOptions:    options,
 	}
 
 	createOpts := &ec2.CreateVpnConnectionInput{
 		CustomerGatewayId: aws.String(d.Get("customer_gateway_id").(string)),
 		Options:           connectOpts,
 		Type:              aws.String(d.Get("type").(string)),
-	}
-
-	if v, ok := d.GetOk("transit_gateway_id"); ok {
-		createOpts.TransitGatewayId = aws.String(v.(string))
-	}
-
-	if v, ok := d.GetOk("vpn_gateway_id"); ok {
-		createOpts.VpnGatewayId = aws.String(v.(string))
+		VpnGatewayId:      aws.String(d.Get("vpn_gateway_id").(string)),
 	}
 
 	// Create the VPN Connection
@@ -329,7 +274,7 @@ func resourceAwsVpnConnectionCreate(d *schema.ResourceData, meta interface{}) er
 		Pending:    []string{"pending"},
 		Target:     []string{"available"},
 		Refresh:    vpnConnectionRefreshFunc(conn, *vpnConnection.VpnConnectionId),
-		Timeout:    40 * time.Minute,
+		Timeout:    30 * time.Minute,
 		Delay:      10 * time.Second,
 		MinTimeout: 10 * time.Second,
 	}
@@ -338,7 +283,7 @@ func resourceAwsVpnConnectionCreate(d *schema.ResourceData, meta interface{}) er
 	if stateErr != nil {
 		return fmt.Errorf(
 			"Error waiting for VPN connection (%s) to become ready: %s",
-			*vpnConnection.VpnConnectionId, stateErr)
+			*vpnConnection.VpnConnectionId, err)
 	}
 
 	// Create tags.
@@ -380,74 +325,30 @@ func resourceAwsVpnConnectionRead(d *schema.ResourceData, meta interface{}) erro
 	resp, err := conn.DescribeVpnConnections(&ec2.DescribeVpnConnectionsInput{
 		VpnConnectionIds: []*string{aws.String(d.Id())},
 	})
-
-	if isAWSErr(err, "InvalidVpnConnectionID.NotFound", "") {
-		log.Printf("[WARN] EC2 VPN Connection (%s) not found, removing from state", d.Id())
-		d.SetId("")
-		return nil
-	}
-
 	if err != nil {
-		return fmt.Errorf("error reading EC2 VPN Connection (%s): %s", d.Id(), err)
+		if ec2err, ok := err.(awserr.Error); ok && ec2err.Code() == "InvalidVpnConnectionID.NotFound" {
+			d.SetId("")
+			return nil
+		} else {
+			log.Printf("[ERROR] Error finding VPN connection: %s", err)
+			return err
+		}
 	}
 
-	if resp == nil || len(resp.VpnConnections) == 0 || resp.VpnConnections[0] == nil {
-		return fmt.Errorf("error reading EC2 VPN Connection (%s): empty response", d.Id())
-	}
-
-	if len(resp.VpnConnections) > 1 {
-		return fmt.Errorf("error reading EC2 VPN Connection (%s): multiple responses", d.Id())
+	if len(resp.VpnConnections) != 1 {
+		return fmt.Errorf("[ERROR] Error finding VPN connection: %s", d.Id())
 	}
 
 	vpnConnection := resp.VpnConnections[0]
-
-	if aws.StringValue(vpnConnection.State) == ec2.VpnStateDeleted {
-		log.Printf("[WARN] EC2 VPN Connection (%s) already deleted, removing from state", d.Id())
+	if vpnConnection == nil || *vpnConnection.State == "deleted" {
+		// Seems we have lost our VPN Connection
 		d.SetId("")
 		return nil
-	}
-
-	var transitGatewayAttachmentID string
-	if vpnConnection.TransitGatewayId != nil {
-		input := &ec2.DescribeTransitGatewayAttachmentsInput{
-			Filters: []*ec2.Filter{
-				{
-					Name:   aws.String("resource-id"),
-					Values: []*string{vpnConnection.VpnConnectionId},
-				},
-				{
-					Name:   aws.String("resource-type"),
-					Values: []*string{aws.String(ec2.TransitGatewayAttachmentResourceTypeVpn)},
-				},
-				{
-					Name:   aws.String("transit-gateway-id"),
-					Values: []*string{vpnConnection.TransitGatewayId},
-				},
-			},
-		}
-
-		log.Printf("[DEBUG] Finding EC2 VPN Connection Transit Gateway Attachment: %s", input)
-		output, err := conn.DescribeTransitGatewayAttachments(input)
-
-		if err != nil {
-			return fmt.Errorf("error finding EC2 VPN Connection (%s) Transit Gateway Attachment: %s", d.Id(), err)
-		}
-
-		if output == nil || len(output.TransitGatewayAttachments) == 0 || output.TransitGatewayAttachments[0] == nil {
-			return fmt.Errorf("error finding EC2 VPN Connection (%s) Transit Gateway Attachment: empty response", d.Id())
-		}
-
-		if len(output.TransitGatewayAttachments) > 1 {
-			return fmt.Errorf("error reading EC2 VPN Connection (%s) Transit Gateway Attachment: multiple responses", d.Id())
-		}
-
-		transitGatewayAttachmentID = aws.StringValue(output.TransitGatewayAttachments[0].TransitGatewayAttachmentId)
 	}
 
 	// Set attributes under the user's control.
 	d.Set("vpn_gateway_id", vpnConnection.VpnGatewayId)
 	d.Set("customer_gateway_id", vpnConnection.CustomerGatewayId)
-	d.Set("transit_gateway_id", vpnConnection.TransitGatewayId)
 	d.Set("type", vpnConnection.Type)
 	d.Set("tags", tagsToMap(vpnConnection.Tags))
 
@@ -462,7 +363,6 @@ func resourceAwsVpnConnectionRead(d *schema.ResourceData, meta interface{}) erro
 
 	// Set read only attributes.
 	d.Set("customer_gateway_configuration", vpnConnection.CustomerGatewayConfiguration)
-	d.Set("transit_gateway_attachment_id", transitGatewayAttachmentID)
 
 	if vpnConnection.CustomerGatewayConfiguration != nil {
 		if tunnelInfo, err := xmlConfigToTunnelInfo(*vpnConnection.CustomerGatewayConfiguration); err != nil {
@@ -514,6 +414,7 @@ func resourceAwsVpnConnectionDelete(d *schema.ResourceData, meta interface{}) er
 	})
 	if err != nil {
 		if ec2err, ok := err.(awserr.Error); ok && ec2err.Code() == "InvalidVpnConnectionID.NotFound" {
+			d.SetId("")
 			return nil
 		} else {
 			log.Printf("[ERROR] Error deleting VPN connection: %s", err)
@@ -585,7 +486,7 @@ func telemetryToMapList(telemetry []*ec2.VgwTelemetry) []map[string]interface{} 
 func xmlConfigToTunnelInfo(xmlConfig string) (*TunnelInfo, error) {
 	var vpnConfig XmlVpnConnectionConfig
 	if err := xml.Unmarshal([]byte(xmlConfig), &vpnConfig); err != nil {
-		return nil, fmt.Errorf("Error Unmarshalling XML: %s", err)
+		return nil, errwrap.Wrapf("Error Unmarshalling XML: {{err}}", err)
 	}
 
 	// don't expect consistent ordering from the XML
@@ -607,57 +508,4 @@ func xmlConfigToTunnelInfo(xmlConfig string) (*TunnelInfo, error) {
 	}
 
 	return &tunnelInfo, nil
-}
-
-func validateVpnConnectionTunnelPreSharedKey(v interface{}, k string) (ws []string, errors []error) {
-	value := v.(string)
-
-	if (len(value) < 8) || (len(value) > 64) {
-		errors = append(errors, fmt.Errorf("%q must be between 8 and 64 characters in length", k))
-	}
-
-	if strings.HasPrefix(value, "0") {
-		errors = append(errors, fmt.Errorf("%q cannot start with zero character", k))
-	}
-
-	if !regexp.MustCompile(`^[0-9a-zA-Z_.]+$`).MatchString(value) {
-		errors = append(errors, fmt.Errorf("%q can only contain alphanumeric, period and underscore characters", k))
-	}
-
-	return
-}
-
-// https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_VpnTunnelOptionsSpecification.html
-func validateVpnConnectionTunnelInsideCIDR(v interface{}, k string) (ws []string, errors []error) {
-	value := v.(string)
-	_, ipnet, err := net.ParseCIDR(value)
-
-	if err != nil {
-		errors = append(errors, fmt.Errorf("%q must contain a valid CIDR, got error parsing: %s", k, err))
-		return
-	}
-
-	if !strings.HasSuffix(ipnet.String(), "/30") {
-		errors = append(errors, fmt.Errorf("%q must be /30 CIDR", k))
-	}
-
-	if !strings.HasPrefix(ipnet.String(), "169.254.") {
-		errors = append(errors, fmt.Errorf("%q must be within 169.254.0.0/16", k))
-	} else if ipnet.String() == "169.254.0.0/30" {
-		errors = append(errors, fmt.Errorf("%q cannot be 169.254.0.0/30", k))
-	} else if ipnet.String() == "169.254.1.0/30" {
-		errors = append(errors, fmt.Errorf("%q cannot be 169.254.1.0/30", k))
-	} else if ipnet.String() == "169.254.2.0/30" {
-		errors = append(errors, fmt.Errorf("%q cannot be 169.254.2.0/30", k))
-	} else if ipnet.String() == "169.254.3.0/30" {
-		errors = append(errors, fmt.Errorf("%q cannot be 169.254.3.0/30", k))
-	} else if ipnet.String() == "169.254.4.0/30" {
-		errors = append(errors, fmt.Errorf("%q cannot be 169.254.4.0/30", k))
-	} else if ipnet.String() == "169.254.5.0/30" {
-		errors = append(errors, fmt.Errorf("%q cannot be 169.254.5.0/30", k))
-	} else if ipnet.String() == "169.254.169.252/30" {
-		errors = append(errors, fmt.Errorf("%q cannot be 169.254.169.252/30", k))
-	}
-
-	return
 }

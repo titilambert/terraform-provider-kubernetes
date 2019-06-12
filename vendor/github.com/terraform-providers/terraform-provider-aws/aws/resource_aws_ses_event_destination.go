@@ -7,7 +7,6 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ses"
 	"github.com/hashicorp/terraform/helper/schema"
-	"github.com/hashicorp/terraform/helper/validation"
 )
 
 func resourceAwsSesEventDestination() *schema.Resource {
@@ -20,42 +19,33 @@ func resourceAwsSesEventDestination() *schema.Resource {
 		},
 
 		Schema: map[string]*schema.Schema{
-			"name": {
+			"name": &schema.Schema{
 				Type:     schema.TypeString,
 				Required: true,
 				ForceNew: true,
 			},
 
-			"configuration_set_name": {
+			"configuration_set_name": &schema.Schema{
 				Type:     schema.TypeString,
 				Required: true,
 				ForceNew: true,
 			},
 
-			"enabled": {
+			"enabled": &schema.Schema{
 				Type:     schema.TypeBool,
 				Optional: true,
 				Default:  false,
 				ForceNew: true,
 			},
 
-			"matching_types": {
+			"matching_types": &schema.Schema{
 				Type:     schema.TypeSet,
 				Required: true,
 				ForceNew: true,
 				Set:      schema.HashString,
 				Elem: &schema.Schema{
-					Type: schema.TypeString,
-					ValidateFunc: validation.StringInSlice([]string{
-						ses.EventTypeSend,
-						ses.EventTypeReject,
-						ses.EventTypeBounce,
-						ses.EventTypeComplaint,
-						ses.EventTypeDelivery,
-						ses.EventTypeOpen,
-						ses.EventTypeClick,
-						ses.EventTypeRenderingFailure,
-					}, false),
+					Type:         schema.TypeString,
+					ValidateFunc: validateMatchingTypes,
 				},
 			},
 
@@ -63,27 +53,23 @@ func resourceAwsSesEventDestination() *schema.Resource {
 				Type:          schema.TypeSet,
 				Optional:      true,
 				ForceNew:      true,
-				ConflictsWith: []string{"kinesis_destination", "sns_destination"},
+				ConflictsWith: []string{"kinesis_destination"},
 				Elem: &schema.Resource{
 					Schema: map[string]*schema.Schema{
-						"default_value": {
+						"default_value": &schema.Schema{
 							Type:     schema.TypeString,
 							Required: true,
 						},
 
-						"dimension_name": {
+						"dimension_name": &schema.Schema{
 							Type:     schema.TypeString,
 							Required: true,
 						},
 
-						"value_source": {
-							Type:     schema.TypeString,
-							Required: true,
-							ValidateFunc: validation.StringInSlice([]string{
-								ses.DimensionValueSourceMessageTag,
-								ses.DimensionValueSourceEmailHeader,
-								ses.DimensionValueSourceLinkTag,
-							}, false),
+						"value_source": &schema.Schema{
+							Type:         schema.TypeString,
+							Required:     true,
+							ValidateFunc: validateDimensionValueSource,
 						},
 					},
 				},
@@ -93,32 +79,15 @@ func resourceAwsSesEventDestination() *schema.Resource {
 				Type:          schema.TypeSet,
 				Optional:      true,
 				ForceNew:      true,
-				MaxItems:      1,
-				ConflictsWith: []string{"cloudwatch_destination", "sns_destination"},
+				ConflictsWith: []string{"cloudwatch_destination"},
 				Elem: &schema.Resource{
 					Schema: map[string]*schema.Schema{
-						"stream_arn": {
+						"stream_arn": &schema.Schema{
 							Type:     schema.TypeString,
 							Required: true,
 						},
 
-						"role_arn": {
-							Type:     schema.TypeString,
-							Required: true,
-						},
-					},
-				},
-			},
-
-			"sns_destination": {
-				Type:          schema.TypeSet,
-				MaxItems:      1,
-				Optional:      true,
-				ForceNew:      true,
-				ConflictsWith: []string{"cloudwatch_destination", "kinesis_destination"},
-				Elem: &schema.Resource{
-					Schema: map[string]*schema.Schema{
-						"topic_arn": {
+						"role_arn": &schema.Schema{
 							Type:     schema.TypeString,
 							Required: true,
 						},
@@ -156,22 +125,15 @@ func resourceAwsSesEventDestinationCreate(d *schema.ResourceData, meta interface
 
 	if v, ok := d.GetOk("kinesis_destination"); ok {
 		destination := v.(*schema.Set).List()
-
+		if len(destination) > 1 {
+			return fmt.Errorf("You can only define a single kinesis destination per record")
+		}
 		kinesis := destination[0].(map[string]interface{})
 		createOpts.EventDestination.KinesisFirehoseDestination = &ses.KinesisFirehoseDestination{
 			DeliveryStreamARN: aws.String(kinesis["stream_arn"].(string)),
 			IAMRoleARN:        aws.String(kinesis["role_arn"].(string)),
 		}
 		log.Printf("[DEBUG] Creating kinesis destination: %#v", kinesis)
-	}
-
-	if v, ok := d.GetOk("sns_destination"); ok {
-		destination := v.(*schema.Set).List()
-		sns := destination[0].(map[string]interface{})
-		createOpts.EventDestination.SNSDestination = &ses.SNSDestination{
-			TopicARN: aws.String(sns["topic_arn"].(string)),
-		}
-		log.Printf("[DEBUG] Creating sns destination: %#v", sns)
 	}
 
 	_, err := conn.CreateConfigurationSetEventDestination(createOpts)
@@ -199,7 +161,40 @@ func resourceAwsSesEventDestinationDelete(d *schema.ResourceData, meta interface
 		EventDestinationName: aws.String(d.Id()),
 	})
 
-	return err
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func validateMatchingTypes(v interface{}, k string) (ws []string, errors []error) {
+	value := v.(string)
+	matchingTypes := map[string]bool{
+		"send":      true,
+		"reject":    true,
+		"bounce":    true,
+		"complaint": true,
+		"delivery":  true,
+	}
+
+	if !matchingTypes[value] {
+		errors = append(errors, fmt.Errorf("%q must be a valid matching event type value: %q", k, value))
+	}
+	return
+}
+
+func validateDimensionValueSource(v interface{}, k string) (ws []string, errors []error) {
+	value := v.(string)
+	matchingSource := map[string]bool{
+		"messageTag":  true,
+		"emailHeader": true,
+	}
+
+	if !matchingSource[value] {
+		errors = append(errors, fmt.Errorf("%q must be a valid dimension value: %q", k, value))
+	}
+	return
 }
 
 func generateCloudWatchDestination(v []interface{}) []*ses.CloudWatchDimensionConfiguration {

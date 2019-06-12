@@ -10,15 +10,14 @@ import (
 	"github.com/hashicorp/terraform/helper/schema"
 )
 
-func dataSourceAwsKmsCiphertext() *schema.Resource {
+func dataSourceAwsKmsCiphetext() *schema.Resource {
 	return &schema.Resource{
-		Read: dataSourceAwsKmsCiphertextRead,
+		Read: dataSourceAwsKmsCiphetextRead,
 
 		Schema: map[string]*schema.Schema{
 			"plaintext": {
-				Type:      schema.TypeString,
-				Required:  true,
-				Sensitive: true,
+				Type:     schema.TypeString,
+				Required: true,
 			},
 
 			"key_id": {
@@ -26,7 +25,7 @@ func dataSourceAwsKmsCiphertext() *schema.Resource {
 				Required: true,
 			},
 
-			"context": {
+			"context": &schema.Schema{
 				Type:     schema.TypeMap,
 				Optional: true,
 				Elem:     &schema.Schema{Type: schema.TypeString},
@@ -40,7 +39,7 @@ func dataSourceAwsKmsCiphertext() *schema.Resource {
 	}
 }
 
-func dataSourceAwsKmsCiphertextRead(d *schema.ResourceData, meta interface{}) error {
+func dataSourceAwsKmsCiphetextRead(d *schema.ResourceData, meta interface{}) error {
 	conn := meta.(*AWSClient).kmsconn
 
 	d.SetId(time.Now().UTC().String())
@@ -55,6 +54,7 @@ func dataSourceAwsKmsCiphertextRead(d *schema.ResourceData, meta interface{}) er
 	}
 
 	log.Printf("[DEBUG] KMS encrypt for key: %s", d.Get("key_id").(string))
+
 	resp, err := conn.Encrypt(req)
 	if err != nil {
 		return err

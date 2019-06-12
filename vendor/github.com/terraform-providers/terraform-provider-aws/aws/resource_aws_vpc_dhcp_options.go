@@ -24,44 +24,42 @@ func resourceAwsVpcDhcpOptions() *schema.Resource {
 		},
 
 		Schema: map[string]*schema.Schema{
-			"domain_name": {
+			"domain_name": &schema.Schema{
 				Type:     schema.TypeString,
 				Optional: true,
 				ForceNew: true,
 			},
 
-			"domain_name_servers": {
+			"domain_name_servers": &schema.Schema{
 				Type:     schema.TypeList,
 				Optional: true,
 				ForceNew: true,
 				Elem:     &schema.Schema{Type: schema.TypeString},
 			},
 
-			"ntp_servers": {
+			"ntp_servers": &schema.Schema{
 				Type:     schema.TypeList,
 				Optional: true,
 				ForceNew: true,
 				Elem:     &schema.Schema{Type: schema.TypeString},
 			},
 
-			"netbios_node_type": {
+			"netbios_node_type": &schema.Schema{
 				Type:     schema.TypeString,
 				Optional: true,
 				ForceNew: true,
 			},
 
-			"netbios_name_servers": {
+			"netbios_name_servers": &schema.Schema{
 				Type:     schema.TypeList,
 				Optional: true,
 				ForceNew: true,
 				Elem:     &schema.Schema{Type: schema.TypeString},
 			},
 
-			"tags": tagsSchema(),
-
-			"owner_id": {
-				Type:     schema.TypeString,
-				Computed: true,
+			"tags": &schema.Schema{
+				Type:     schema.TypeMap,
+				Optional: true,
 			},
 		},
 	}
@@ -119,7 +117,7 @@ func resourceAwsVpcDhcpOptionsCreate(d *schema.ResourceData, meta interface{}) e
 	}
 
 	dos := resp.DhcpOptions
-	d.SetId(aws.StringValue(dos.DhcpOptionsId))
+	d.SetId(*dos.DhcpOptionsId)
 	log.Printf("[INFO] DHCP Options Set ID: %s", d.Id())
 
 	// Wait for the DHCP Options to become available
@@ -149,11 +147,17 @@ func resourceAwsVpcDhcpOptionsRead(d *schema.ResourceData, meta interface{}) err
 
 	resp, err := conn.DescribeDhcpOptions(req)
 	if err != nil {
-		if isNoSuchDhcpOptionIDErr(err) {
+		ec2err, ok := err.(awserr.Error)
+		if !ok {
+			return fmt.Errorf("Error retrieving DHCP Options: %s", err.Error())
+		}
+
+		if ec2err.Code() == "InvalidDhcpOptionID.NotFound" {
 			log.Printf("[WARN] DHCP Options (%s) not found, removing from state", d.Id())
 			d.SetId("")
 			return nil
 		}
+
 		return fmt.Errorf("Error retrieving DHCP Options: %s", err.Error())
 	}
 
@@ -163,7 +167,6 @@ func resourceAwsVpcDhcpOptionsRead(d *schema.ResourceData, meta interface{}) err
 
 	opts := resp.DhcpOptions[0]
 	d.Set("tags", tagsToMap(opts.Tags))
-	d.Set("owner_id", opts.OwnerId)
 
 	for _, cfg := range opts.DhcpConfigurations {
 		tfKey := strings.Replace(*cfg.Key, "-", "_", -1)
@@ -185,12 +188,7 @@ func resourceAwsVpcDhcpOptionsRead(d *schema.ResourceData, meta interface{}) err
 
 func resourceAwsVpcDhcpOptionsUpdate(d *schema.ResourceData, meta interface{}) error {
 	conn := meta.(*AWSClient).ec2conn
-
-	if err := setTags(conn, d); err != nil {
-		return err
-	}
-
-	return resourceAwsVpcDhcpOptionsRead(d, meta)
+	return setTags(conn, d)
 }
 
 func resourceAwsVpcDhcpOptionsDelete(d *schema.ResourceData, meta interface{}) error {
@@ -214,7 +212,7 @@ func resourceAwsVpcDhcpOptionsDelete(d *schema.ResourceData, meta interface{}) e
 		}
 
 		switch ec2err.Code() {
-		case "InvalidDhcpOptionsID.NotFound", "InvalidDhcpOptionID.NotFound":
+		case "InvalidDhcpOptionsID.NotFound":
 			return nil
 		case "DependencyViolation":
 			// If it is a dependency violation, we want to disassociate
@@ -244,7 +242,7 @@ func resourceAwsVpcDhcpOptionsDelete(d *schema.ResourceData, meta interface{}) e
 func findVPCsByDHCPOptionsID(conn *ec2.EC2, id string) ([]*ec2.Vpc, error) {
 	req := &ec2.DescribeVpcsInput{
 		Filters: []*ec2.Filter{
-			{
+			&ec2.Filter{
 				Name: aws.String("dhcp-options-id"),
 				Values: []*string{
 					aws.String(id),
@@ -274,7 +272,7 @@ func resourceDHCPOptionsStateRefreshFunc(conn *ec2.EC2, id string) resource.Stat
 
 		resp, err := conn.DescribeDhcpOptions(DescribeDhcpOpts)
 		if err != nil {
-			if isNoSuchDhcpOptionIDErr(err) {
+			if ec2err, ok := err.(awserr.Error); ok && ec2err.Code() == "InvalidDhcpOptionsID.NotFound" {
 				resp = nil
 			} else {
 				log.Printf("Error on DHCPOptionsStateRefresh: %s", err)
@@ -291,8 +289,4 @@ func resourceDHCPOptionsStateRefreshFunc(conn *ec2.EC2, id string) resource.Stat
 		dos := resp.DhcpOptions[0]
 		return dos, "created", nil
 	}
-}
-
-func isNoSuchDhcpOptionIDErr(err error) bool {
-	return isAWSErr(err, "InvalidDhcpOptionID.NotFound", "") || isAWSErr(err, "InvalidDhcpOptionsID.NotFound", "")
 }

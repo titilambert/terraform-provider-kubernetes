@@ -80,7 +80,6 @@ func resourceAwsApiGatewayUsagePlanKeyRead(d *schema.ResourceData, meta interfac
 	})
 	if err != nil {
 		if awsErr, ok := err.(awserr.Error); ok && awsErr.Code() == "NotFoundException" {
-			log.Printf("[WARN] API Gateway Usage Plan Key (%s) not found, removing from state", d.Id())
 			d.SetId("")
 			return nil
 		}

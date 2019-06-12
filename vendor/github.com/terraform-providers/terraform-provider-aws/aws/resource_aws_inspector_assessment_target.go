@@ -1,11 +1,11 @@
 package aws
 
 import (
-	"fmt"
 	"log"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/service/inspector"
 	"github.com/hashicorp/terraform/helper/resource"
 	"github.com/hashicorp/terraform/helper/schema"
@@ -17,9 +17,6 @@ func resourceAWSInspectorAssessmentTarget() *schema.Resource {
 		Read:   resourceAwsInspectorAssessmentTargetRead,
 		Update: resourceAwsInspectorAssessmentTargetUpdate,
 		Delete: resourceAwsInspectorAssessmentTargetDelete,
-		Importer: &schema.ResourceImporter{
-			State: schema.ImportStatePassthrough,
-		},
 
 		Schema: map[string]*schema.Schema{
 			"name": {
@@ -33,7 +30,7 @@ func resourceAWSInspectorAssessmentTarget() *schema.Resource {
 			},
 			"resource_group_arn": {
 				Type:     schema.TypeString,
-				Optional: true,
+				Required: true,
 			},
 		},
 	}
@@ -42,19 +39,19 @@ func resourceAWSInspectorAssessmentTarget() *schema.Resource {
 func resourceAwsInspectorAssessmentTargetCreate(d *schema.ResourceData, meta interface{}) error {
 	conn := meta.(*AWSClient).inspectorconn
 
-	input := &inspector.CreateAssessmentTargetInput{
-		AssessmentTargetName: aws.String(d.Get("name").(string)),
-	}
+	targetName := d.Get("name").(string)
+	resourceGroupArn := d.Get("resource_group_arn").(string)
 
-	if v, ok := d.GetOk("resource_group_arn"); ok {
-		input.ResourceGroupArn = aws.String(v.(string))
-	}
-
-	resp, err := conn.CreateAssessmentTarget(input)
+	resp, err := conn.CreateAssessmentTarget(&inspector.CreateAssessmentTargetInput{
+		AssessmentTargetName: aws.String(targetName),
+		ResourceGroupArn:     aws.String(resourceGroupArn),
+	})
 	if err != nil {
-		return fmt.Errorf("error creating Inspector Assessment Target: %s", err)
+		return err
 	}
+	log.Printf("[DEBUG] Inspector Assessment %s created", *resp.AssessmentTargetArn)
 
+	d.Set("arn", resp.AssessmentTargetArn)
 	d.SetId(*resp.AssessmentTargetArn)
 
 	return resourceAwsInspectorAssessmentTargetRead(d, meta)
@@ -63,21 +60,24 @@ func resourceAwsInspectorAssessmentTargetCreate(d *schema.ResourceData, meta int
 func resourceAwsInspectorAssessmentTargetRead(d *schema.ResourceData, meta interface{}) error {
 	conn := meta.(*AWSClient).inspectorconn
 
-	assessmentTarget, err := describeInspectorAssessmentTarget(conn, d.Id())
+	resp, err := conn.DescribeAssessmentTargets(&inspector.DescribeAssessmentTargetsInput{
+		AssessmentTargetArns: []*string{
+			aws.String(d.Id()),
+		},
+	})
 
 	if err != nil {
-		return fmt.Errorf("error describing Inspector Assessment Target (%s): %s", d.Id(), err)
+		if inspectorerr, ok := err.(awserr.Error); ok && inspectorerr.Code() == "InvalidInputException" {
+			return nil
+		} else {
+			log.Printf("[ERROR] Error finding Inspector Assessment Target: %s", err)
+			return err
+		}
 	}
 
-	if assessmentTarget == nil {
-		log.Printf("[WARN] Inspector Assessment Target (%s) not found, removing from state", d.Id())
-		d.SetId("")
-		return nil
+	if resp.AssessmentTargets != nil && len(resp.AssessmentTargets) > 0 {
+		d.Set("name", resp.AssessmentTargets[0].Name)
 	}
-
-	d.Set("arn", assessmentTarget.Arn)
-	d.Set("name", assessmentTarget.Name)
-	d.Set("resource_group_arn", assessmentTarget.ResourceGroupArn)
 
 	return nil
 }
@@ -88,16 +88,15 @@ func resourceAwsInspectorAssessmentTargetUpdate(d *schema.ResourceData, meta int
 	input := inspector.UpdateAssessmentTargetInput{
 		AssessmentTargetArn:  aws.String(d.Id()),
 		AssessmentTargetName: aws.String(d.Get("name").(string)),
-	}
-
-	if v, ok := d.GetOk("resource_group_arn"); ok {
-		input.ResourceGroupArn = aws.String(v.(string))
+		ResourceGroupArn:     aws.String(d.Get("resource_group_arn").(string)),
 	}
 
 	_, err := conn.UpdateAssessmentTarget(&input)
 	if err != nil {
-		return fmt.Errorf("error updating Inspector Assessment Target (%s): %s", d.Id(), err)
+		return err
 	}
+
+	log.Println("[DEBUG] Inspector Assessment Target updated")
 
 	return resourceAwsInspectorAssessmentTargetRead(d, meta)
 }
@@ -109,42 +108,16 @@ func resourceAwsInspectorAssessmentTargetDelete(d *schema.ResourceData, meta int
 		_, err := conn.DeleteAssessmentTarget(&inspector.DeleteAssessmentTargetInput{
 			AssessmentTargetArn: aws.String(d.Id()),
 		})
-
-		if isAWSErr(err, inspector.ErrCodeAssessmentRunInProgressException, "") {
-			return resource.RetryableError(err)
-		}
-
 		if err != nil {
-			return resource.NonRetryableError(err)
+			if inspectorerr, ok := err.(awserr.Error); ok && inspectorerr.Code() == "AssessmentRunInProgressException" {
+				log.Printf("[ERROR] Assement Run in progress: %s", err)
+				return resource.RetryableError(err)
+			} else {
+				log.Printf("[ERROR] Error deleting Assement Target: %s", err)
+				return resource.NonRetryableError(err)
+			}
 		}
-
 		return nil
 	})
 
-}
-
-func describeInspectorAssessmentTarget(conn *inspector.Inspector, arn string) (*inspector.AssessmentTarget, error) {
-	input := &inspector.DescribeAssessmentTargetsInput{
-		AssessmentTargetArns: []*string{aws.String(arn)},
-	}
-
-	output, err := conn.DescribeAssessmentTargets(input)
-
-	if isAWSErr(err, inspector.ErrCodeInvalidInputException, "") {
-		return nil, nil
-	}
-
-	if err != nil {
-		return nil, err
-	}
-
-	var assessmentTarget *inspector.AssessmentTarget
-	for _, target := range output.AssessmentTargets {
-		if aws.StringValue(target.Arn) == arn {
-			assessmentTarget = target
-			break
-		}
-	}
-
-	return assessmentTarget, nil
 }

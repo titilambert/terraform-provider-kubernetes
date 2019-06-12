@@ -7,7 +7,6 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/codecommit"
 	"github.com/hashicorp/terraform/helper/schema"
-	"github.com/hashicorp/terraform/helper/validation"
 )
 
 func resourceAwsCodeCommitRepository() *schema.Resource {
@@ -22,16 +21,30 @@ func resourceAwsCodeCommitRepository() *schema.Resource {
 
 		Schema: map[string]*schema.Schema{
 			"repository_name": {
-				Type:         schema.TypeString,
-				Required:     true,
-				ForceNew:     true,
-				ValidateFunc: validation.StringLenBetween(0, 100),
+				Type:     schema.TypeString,
+				Required: true,
+				ForceNew: true,
+				ValidateFunc: func(v interface{}, k string) (ws []string, errors []error) {
+					value := v.(string)
+					if len(value) > 100 {
+						errors = append(errors, fmt.Errorf(
+							"%q cannot be longer than 100 characters", k))
+					}
+					return
+				},
 			},
 
 			"description": {
-				Type:         schema.TypeString,
-				Optional:     true,
-				ValidateFunc: validation.StringLenBetween(0, 1000),
+				Type:     schema.TypeString,
+				Optional: true,
+				ValidateFunc: func(v interface{}, k string) (ws []string, errors []error) {
+					value := v.(string)
+					if len(value) > 1000 {
+						errors = append(errors, fmt.Errorf(
+							"%q cannot be longer than 1000 characters", k))
+					}
+					return
+				},
 			},
 
 			"arn": {
@@ -113,13 +126,7 @@ func resourceAwsCodeCommitRepositoryRead(d *schema.ResourceData, meta interface{
 
 	out, err := conn.GetRepository(input)
 	if err != nil {
-		if isAWSErr(err, codecommit.ErrCodeRepositoryDoesNotExistException, "") {
-			log.Printf("[WARN] CodeCommit Repository (%s) not found, removing from state", d.Id())
-			d.SetId("")
-			return nil
-		} else {
-			return fmt.Errorf("Error reading CodeCommit Repository: %s", err.Error())
-		}
+		return fmt.Errorf("Error reading CodeCommit Repository: %s", err.Error())
 	}
 
 	d.Set("repository_id", out.RepositoryMetadata.RepositoryId)

@@ -5,17 +5,14 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log"
-	"regexp"
 	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
-	"github.com/aws/aws-sdk-go/service/elb"
 	"github.com/aws/aws-sdk-go/service/iam"
 	"github.com/hashicorp/terraform/helper/resource"
 	"github.com/hashicorp/terraform/helper/schema"
-	"github.com/hashicorp/terraform/helper/validation"
 )
 
 func resourceAwsIAMServerCertificate() *schema.Resource {
@@ -63,15 +60,28 @@ func resourceAwsIAMServerCertificate() *schema.Resource {
 				Computed:      true,
 				ForceNew:      true,
 				ConflictsWith: []string{"name_prefix"},
-				ValidateFunc:  validation.StringLenBetween(0, 128),
+				ValidateFunc: func(v interface{}, k string) (ws []string, errors []error) {
+					value := v.(string)
+					if len(value) > 128 {
+						errors = append(errors, fmt.Errorf(
+							"%q cannot be longer than 128 characters", k))
+					}
+					return
+				},
 			},
 
 			"name_prefix": {
-				Type:          schema.TypeString,
-				Optional:      true,
-				ForceNew:      true,
-				ConflictsWith: []string{"name"},
-				ValidateFunc:  validation.StringLenBetween(0, 128-resource.UniqueIDSuffixLength),
+				Type:     schema.TypeString,
+				Optional: true,
+				ForceNew: true,
+				ValidateFunc: func(v interface{}, k string) (ws []string, errors []error) {
+					value := v.(string)
+					if len(value) > 102 {
+						errors = append(errors, fmt.Errorf(
+							"%q cannot be longer than 102 characters, name is limited to 128", k))
+					}
+					return
+				},
 			},
 
 			"arn": {
@@ -113,9 +123,9 @@ func resourceAwsIAMServerCertificateCreate(d *schema.ResourceData, meta interfac
 	resp, err := conn.UploadServerCertificate(createOpts)
 	if err != nil {
 		if awsErr, ok := err.(awserr.Error); ok {
-			return fmt.Errorf("Error uploading server certificate, error: %s: %s", awsErr.Code(), awsErr.Message())
+			return fmt.Errorf("[WARN] Error uploading server certificate, error: %s: %s", awsErr.Code(), awsErr.Message())
 		}
-		return fmt.Errorf("Error uploading server certificate, error: %s", err)
+		return fmt.Errorf("[WARN] Error uploading server certificate, error: %s", err)
 	}
 
 	d.SetId(*resp.ServerCertificateMetadata.ServerCertificateId)
@@ -137,9 +147,9 @@ func resourceAwsIAMServerCertificateRead(d *schema.ResourceData, meta interface{
 				d.SetId("")
 				return nil
 			}
-			return fmt.Errorf("Error reading IAM Server Certificate: %s: %s", awsErr.Code(), awsErr.Message())
+			return fmt.Errorf("[WARN] Error reading IAM Server Certificate: %s: %s", awsErr.Code(), awsErr.Message())
 		}
-		return fmt.Errorf("Error reading IAM Server Certificate: %s", err)
+		return fmt.Errorf("[WARN] Error reading IAM Server Certificate: %s", err)
 	}
 
 	d.SetId(*resp.ServerCertificate.ServerCertificateMetadata.ServerCertificateId)
@@ -170,11 +180,12 @@ func resourceAwsIAMServerCertificateDelete(d *schema.ResourceData, meta interfac
 		if err != nil {
 			if awsErr, ok := err.(awserr.Error); ok {
 				if awsErr.Code() == "DeleteConflict" && strings.Contains(awsErr.Message(), "currently in use by arn") {
-					currentlyInUseBy(awsErr.Message(), meta.(*AWSClient).elbconn)
 					log.Printf("[WARN] Conflict deleting server certificate: %s, retrying", awsErr.Message())
 					return resource.RetryableError(err)
 				}
 				if awsErr.Code() == "NoSuchEntity" {
+					log.Printf("[WARN] IAM Server Certificate (%s) not found, removing from state", d.Id())
+					d.SetId("")
 					return nil
 				}
 			}
@@ -183,7 +194,12 @@ func resourceAwsIAMServerCertificateDelete(d *schema.ResourceData, meta interfac
 		return nil
 	})
 
-	return err
+	if err != nil {
+		return err
+	}
+
+	d.SetId("")
+	return nil
 }
 
 func resourceAwsIAMServerCertificateImport(
@@ -193,33 +209,17 @@ func resourceAwsIAMServerCertificateImport(
 	return []*schema.ResourceData{d}, nil
 }
 
-func currentlyInUseBy(awsErr string, conn *elb.ELB) {
-	r := regexp.MustCompile(`currently in use by ([a-z0-9:-]+)\/([a-z0-9-]+)\.`)
-	matches := r.FindStringSubmatch(awsErr)
-	if len(matches) > 0 {
-		lbName := matches[2]
-		describeElbOpts := &elb.DescribeLoadBalancersInput{
-			LoadBalancerNames: []*string{aws.String(lbName)},
-		}
-		if _, err := conn.DescribeLoadBalancers(describeElbOpts); err != nil {
-			if isAWSErr(err, "LoadBalancerNotFound", "") {
-				log.Printf("[WARN] Load Balancer (%s) causing delete conflict not found", lbName)
-			}
-		}
-	}
-}
-
 func normalizeCert(cert interface{}) string {
 	if cert == nil || cert == (*string)(nil) {
 		return ""
 	}
 
 	var rawCert string
-	switch cert := cert.(type) {
+	switch cert.(type) {
 	case string:
-		rawCert = cert
+		rawCert = cert.(string)
 	case *string:
-		rawCert = *cert
+		rawCert = *cert.(*string)
 	default:
 		return ""
 	}

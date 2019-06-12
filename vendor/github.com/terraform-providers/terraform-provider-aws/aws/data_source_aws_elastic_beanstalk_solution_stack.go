@@ -7,7 +7,6 @@ import (
 
 	"github.com/aws/aws-sdk-go/service/elasticbeanstalk"
 	"github.com/hashicorp/terraform/helper/schema"
-	"github.com/hashicorp/terraform/helper/validation"
 )
 
 func dataSourceAwsElasticBeanstalkSolutionStack() *schema.Resource {
@@ -19,7 +18,7 @@ func dataSourceAwsElasticBeanstalkSolutionStack() *schema.Resource {
 				Type:         schema.TypeString,
 				Required:     true,
 				ForceNew:     true,
-				ValidateFunc: validation.ValidateRegexp,
+				ValidateFunc: validateSolutionStackNameRegex,
 			},
 			"most_recent": {
 				Type:     schema.TypeBool,
@@ -44,7 +43,6 @@ func dataSourceAwsElasticBeanstalkSolutionStackRead(d *schema.ResourceData, meta
 
 	var params *elasticbeanstalk.ListAvailableSolutionStacksInput
 
-	log.Printf("[DEBUG] Reading Elastic Beanstalk Solution Stack: %s", params)
 	resp, err := conn.ListAvailableSolutionStacks(params)
 	if err != nil {
 		return err
@@ -93,4 +91,15 @@ func solutionStackDescriptionAttributes(d *schema.ResourceData, solutionStack *s
 	d.SetId(*solutionStack)
 	d.Set("name", solutionStack)
 	return nil
+}
+
+func validateSolutionStackNameRegex(v interface{}, k string) (ws []string, errors []error) {
+	value := v.(string)
+
+	if _, err := regexp.Compile(value); err != nil {
+		errors = append(errors, fmt.Errorf(
+			"%q contains an invalid regular expression: %s",
+			k, err))
+	}
+	return
 }

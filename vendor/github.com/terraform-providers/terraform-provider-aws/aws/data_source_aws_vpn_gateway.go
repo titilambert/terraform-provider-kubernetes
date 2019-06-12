@@ -3,7 +3,6 @@ package aws
 import (
 	"fmt"
 	"log"
-	"strconv"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
@@ -35,11 +34,6 @@ func dataSourceAwsVpnGateway() *schema.Resource {
 				Optional: true,
 				Computed: true,
 			},
-			"amazon_side_asn": {
-				Type:     schema.TypeString,
-				Optional: true,
-				Computed: true,
-			},
 			"filter": ec2CustomFiltersSchema(),
 			"tags":   tagsSchemaComputed(),
 		},
@@ -48,6 +42,8 @@ func dataSourceAwsVpnGateway() *schema.Resource {
 
 func dataSourceAwsVpnGatewayRead(d *schema.ResourceData, meta interface{}) error {
 	conn := meta.(*AWSClient).ec2conn
+
+	log.Printf("[DEBUG] Reading VPN Gateways.")
 
 	req := &ec2.DescribeVpnGatewaysInput{}
 
@@ -61,13 +57,6 @@ func dataSourceAwsVpnGatewayRead(d *schema.ResourceData, meta interface{}) error
 			"availability-zone": d.Get("availability_zone").(string),
 		},
 	)
-	if asn, ok := d.GetOk("amazon_side_asn"); ok {
-		req.Filters = append(req.Filters, buildEC2AttributeFilterList(
-			map[string]string{
-				"amazon-side-asn": asn.(string),
-			},
-		)...)
-	}
 	if id, ok := d.GetOk("attached_vpc_id"); ok {
 		req.Filters = append(req.Filters, buildEC2AttributeFilterList(
 			map[string]string{
@@ -87,7 +76,6 @@ func dataSourceAwsVpnGatewayRead(d *schema.ResourceData, meta interface{}) error
 		req.Filters = nil
 	}
 
-	log.Printf("[DEBUG] Reading VPN Gateway: %s", req)
 	resp, err := conn.DescribeVpnGateways(req)
 	if err != nil {
 		return err
@@ -104,7 +92,6 @@ func dataSourceAwsVpnGatewayRead(d *schema.ResourceData, meta interface{}) error
 	d.SetId(aws.StringValue(vgw.VpnGatewayId))
 	d.Set("state", vgw.State)
 	d.Set("availability_zone", vgw.AvailabilityZone)
-	d.Set("amazon_side_asn", strconv.FormatInt(aws.Int64Value(vgw.AmazonSideAsn), 10))
 	d.Set("tags", tagsToMap(vgw.Tags))
 
 	for _, attachment := range vgw.VpcAttachments {

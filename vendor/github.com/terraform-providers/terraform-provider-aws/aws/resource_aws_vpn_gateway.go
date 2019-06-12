@@ -3,7 +3,6 @@ package aws
 import (
 	"fmt"
 	"log"
-	"strconv"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -24,21 +23,13 @@ func resourceAwsVpnGateway() *schema.Resource {
 		},
 
 		Schema: map[string]*schema.Schema{
-			"availability_zone": {
+			"availability_zone": &schema.Schema{
 				Type:     schema.TypeString,
 				Optional: true,
 				ForceNew: true,
 			},
 
-			"amazon_side_asn": {
-				Type:         schema.TypeString,
-				Optional:     true,
-				ForceNew:     true,
-				Computed:     true,
-				ValidateFunc: validateAmazonSideAsn,
-			},
-
-			"vpc_id": {
+			"vpc_id": &schema.Schema{
 				Type:     schema.TypeString,
 				Optional: true,
 				Computed: true,
@@ -55,13 +46,6 @@ func resourceAwsVpnGatewayCreate(d *schema.ResourceData, meta interface{}) error
 	createOpts := &ec2.CreateVpnGatewayInput{
 		AvailabilityZone: aws.String(d.Get("availability_zone").(string)),
 		Type:             aws.String("ipsec.1"),
-	}
-	if asn, ok := d.GetOk("amazon_side_asn"); ok {
-		i, err := strconv.ParseInt(asn.(string), 10, 64)
-		if err != nil {
-			return err
-		}
-		createOpts.AmazonSideAsn = aws.Int64(i)
 	}
 
 	// Create the VPN gateway
@@ -114,7 +98,6 @@ func resourceAwsVpnGatewayRead(d *schema.ResourceData, meta interface{}) error {
 	if vpnGateway.AvailabilityZone != nil && *vpnGateway.AvailabilityZone != "" {
 		d.Set("availability_zone", vpnGateway.AvailabilityZone)
 	}
-	d.Set("amazon_side_asn", strconv.FormatInt(aws.Int64Value(vpnGateway.AmazonSideAsn), 10))
 	d.Set("tags", tagsToMap(vpnGateway.Tags))
 
 	return nil
@@ -198,11 +181,14 @@ func resourceAwsVpnGatewayAttach(d *schema.ResourceData, meta interface{}) error
 		VpcId:        aws.String(d.Get("vpc_id").(string)),
 	}
 
-	err := resource.Retry(1*time.Minute, func() *resource.RetryError {
+	err := resource.Retry(30*time.Second, func() *resource.RetryError {
 		_, err := conn.AttachVpnGateway(req)
 		if err != nil {
-			if isAWSErr(err, "InvalidVpnGatewayID.NotFound", "") {
-				return resource.RetryableError(err)
+			if ec2err, ok := err.(awserr.Error); ok {
+				if "InvalidVpnGatewayID.NotFound" == ec2err.Code() {
+					return resource.RetryableError(
+						fmt.Errorf("Gateway not found, retry for eventual consistancy"))
+				}
 			}
 			return resource.NonRetryableError(err)
 		}
@@ -218,8 +204,8 @@ func resourceAwsVpnGatewayAttach(d *schema.ResourceData, meta interface{}) error
 	stateConf := &resource.StateChangeConf{
 		Pending: []string{"detached", "attaching"},
 		Target:  []string{"attached"},
-		Refresh: vpnGatewayAttachStateRefreshFunc(conn, d.Id()),
-		Timeout: 15 * time.Minute,
+		Refresh: vpnGatewayAttachStateRefreshFunc(conn, d.Id(), "available"),
+		Timeout: 10 * time.Minute,
 	}
 	if _, err := stateConf.WaitForState(); err != nil {
 		return fmt.Errorf(
@@ -279,7 +265,7 @@ func resourceAwsVpnGatewayDetach(d *schema.ResourceData, meta interface{}) error
 	stateConf := &resource.StateChangeConf{
 		Pending: []string{"attached", "detaching", "available"},
 		Target:  []string{"detached"},
-		Refresh: vpnGatewayAttachStateRefreshFunc(conn, d.Id()),
+		Refresh: vpnGatewayAttachStateRefreshFunc(conn, d.Id(), "detached"),
 		Timeout: 10 * time.Minute,
 	}
 	if _, err := stateConf.WaitForState(); err != nil {
@@ -293,7 +279,7 @@ func resourceAwsVpnGatewayDetach(d *schema.ResourceData, meta interface{}) error
 
 // vpnGatewayAttachStateRefreshFunc returns a resource.StateRefreshFunc that is used to watch
 // the state of a VPN gateway's attachment
-func vpnGatewayAttachStateRefreshFunc(conn *ec2.EC2, id string) resource.StateRefreshFunc {
+func vpnGatewayAttachStateRefreshFunc(conn *ec2.EC2, id string, expected string) resource.StateRefreshFunc {
 	var start time.Time
 	return func() (interface{}, string, error) {
 		if start.IsZero() {

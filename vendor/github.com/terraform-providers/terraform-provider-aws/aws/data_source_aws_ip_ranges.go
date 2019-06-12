@@ -14,10 +14,9 @@ import (
 )
 
 type dataSourceAwsIPRangesResult struct {
-	CreateDate   string
-	Prefixes     []dataSourceAwsIPRangesPrefix
-	Ipv6Prefixes []dataSourceAwsIPRangesIpv6Prefix `json:"ipv6_prefixes"`
-	SyncToken    string
+	CreateDate string
+	Prefixes   []dataSourceAwsIPRangesPrefix
+	SyncToken  string
 }
 
 type dataSourceAwsIPRangesPrefix struct {
@@ -26,49 +25,33 @@ type dataSourceAwsIPRangesPrefix struct {
 	Service  string
 }
 
-type dataSourceAwsIPRangesIpv6Prefix struct {
-	Ipv6Prefix string `json:"ipv6_prefix"`
-	Region     string
-	Service    string
-}
-
 func dataSourceAwsIPRanges() *schema.Resource {
 	return &schema.Resource{
 		Read: dataSourceAwsIPRangesRead,
 
 		Schema: map[string]*schema.Schema{
-			"cidr_blocks": {
+			"cidr_blocks": &schema.Schema{
 				Type:     schema.TypeList,
 				Computed: true,
 				Elem:     &schema.Schema{Type: schema.TypeString},
 			},
-			"create_date": {
+			"create_date": &schema.Schema{
 				Type:     schema.TypeString,
 				Computed: true,
 			},
-			"ipv6_cidr_blocks": {
-				Type:     schema.TypeList,
-				Computed: true,
-				Elem:     &schema.Schema{Type: schema.TypeString},
-			},
-			"regions": {
+			"regions": &schema.Schema{
 				Type:     schema.TypeSet,
 				Elem:     &schema.Schema{Type: schema.TypeString},
 				Optional: true,
 			},
-			"services": {
+			"services": &schema.Schema{
 				Type:     schema.TypeSet,
 				Required: true,
 				Elem:     &schema.Schema{Type: schema.TypeString},
 			},
-			"sync_token": {
+			"sync_token": &schema.Schema{
 				Type:     schema.TypeInt,
 				Computed: true,
-			},
-			"url": {
-				Type:     schema.TypeString,
-				Optional: true,
-				Default:  "https://ip-ranges.amazonaws.com/ip-ranges.json",
 			},
 		},
 	}
@@ -77,14 +60,13 @@ func dataSourceAwsIPRanges() *schema.Resource {
 func dataSourceAwsIPRangesRead(d *schema.ResourceData, meta interface{}) error {
 
 	conn := cleanhttp.DefaultClient()
-	url := d.Get("url").(string)
 
-	log.Printf("[DEBUG] Reading IP ranges from %s", url)
+	log.Printf("[DEBUG] Reading IP ranges")
 
-	res, err := conn.Get(url)
+	res, err := conn.Get("https://ip-ranges.amazonaws.com/ip-ranges.json")
 
 	if err != nil {
-		return fmt.Errorf("Error listing IP ranges from (%s): %s", url, err)
+		return fmt.Errorf("Error listing IP ranges: %s", err)
 	}
 
 	defer res.Body.Close()
@@ -92,13 +74,13 @@ func dataSourceAwsIPRangesRead(d *schema.ResourceData, meta interface{}) error {
 	data, err := ioutil.ReadAll(res.Body)
 
 	if err != nil {
-		return fmt.Errorf("Error reading response body from (%s): %s", url, err)
+		return fmt.Errorf("Error reading response body: %s", err)
 	}
 
 	result := new(dataSourceAwsIPRangesResult)
 
 	if err := json.Unmarshal(data, result); err != nil {
-		return fmt.Errorf("Error parsing result from (%s): %s", url, err)
+		return fmt.Errorf("Error parsing result: %s", err)
 	}
 
 	if err := d.Set("create_date", result.CreateDate); err != nil {
@@ -138,42 +120,30 @@ func dataSourceAwsIPRangesRead(d *schema.ResourceData, meta interface{}) error {
 		regions        = get("regions")
 		services       = get("services")
 		noRegionFilter = regions.Len() == 0
-		ipPrefixes     []string
-		ipv6Prefixes   []string
+		prefixes       []string
 	)
 
-	matchFilter := func(region, service string) bool {
-		matchRegion := noRegionFilter || regions.Contains(strings.ToLower(region))
-		matchService := services.Contains(strings.ToLower(service))
-		return matchRegion && matchService
-	}
-
 	for _, e := range result.Prefixes {
-		if matchFilter(e.Region, e.Service) {
-			ipPrefixes = append(ipPrefixes, e.IpPrefix)
+
+		var (
+			matchRegion  = noRegionFilter || regions.Contains(strings.ToLower(e.Region))
+			matchService = services.Contains(strings.ToLower(e.Service))
+		)
+
+		if matchRegion && matchService {
+			prefixes = append(prefixes, e.IpPrefix)
 		}
+
 	}
 
-	for _, e := range result.Ipv6Prefixes {
-		if matchFilter(e.Region, e.Service) {
-			ipv6Prefixes = append(ipv6Prefixes, e.Ipv6Prefix)
-		}
+	if len(prefixes) == 0 {
+		return fmt.Errorf(" No IP ranges result from filters")
 	}
 
-	if len(ipPrefixes) == 0 && len(ipv6Prefixes) == 0 {
-		return fmt.Errorf("No IP ranges result from filters from (%s)", url)
-	}
+	sort.Strings(prefixes)
 
-	sort.Strings(ipPrefixes)
-
-	if err := d.Set("cidr_blocks", ipPrefixes); err != nil {
-		return fmt.Errorf("Error setting cidr_blocks: %s", err)
-	}
-
-	sort.Strings(ipv6Prefixes)
-
-	if err := d.Set("ipv6_cidr_blocks", ipv6Prefixes); err != nil {
-		return fmt.Errorf("Error setting ipv6_cidr_blocks: %s", err)
+	if err := d.Set("cidr_blocks", prefixes); err != nil {
+		return fmt.Errorf("Error setting ip ranges: %s", err)
 	}
 
 	return nil

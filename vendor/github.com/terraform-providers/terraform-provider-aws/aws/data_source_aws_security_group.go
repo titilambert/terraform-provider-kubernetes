@@ -5,7 +5,6 @@ import (
 	"log"
 
 	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/arn"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/hashicorp/terraform/helper/schema"
 )
@@ -39,11 +38,6 @@ func dataSourceAwsSecurityGroup() *schema.Resource {
 			},
 
 			"tags": tagsSchemaComputed(),
-
-			"description": {
-				Type:     schema.TypeString,
-				Computed: true,
-			},
 		},
 	}
 }
@@ -52,7 +46,7 @@ func dataSourceAwsSecurityGroupRead(d *schema.ResourceData, meta interface{}) er
 	conn := meta.(*AWSClient).ec2conn
 	req := &ec2.DescribeSecurityGroupsInput{}
 
-	if id, ok := d.GetOk("id"); ok {
+	if id, idExists := d.GetOk("id"); idExists {
 		req.GroupIds = []*string{aws.String(id.(string))}
 	}
 
@@ -73,7 +67,7 @@ func dataSourceAwsSecurityGroupRead(d *schema.ResourceData, meta interface{}) er
 		req.Filters = nil
 	}
 
-	log.Printf("[DEBUG] Reading Security Group: %s", req)
+	log.Printf("[DEBUG] Describe Security Groups %v\n", req)
 	resp, err := conn.DescribeSecurityGroups(req)
 	if err != nil {
 		return err
@@ -88,18 +82,13 @@ func dataSourceAwsSecurityGroupRead(d *schema.ResourceData, meta interface{}) er
 	sg := resp.SecurityGroups[0]
 
 	d.SetId(*sg.GroupId)
+	d.Set("id", sg.VpcId)
 	d.Set("name", sg.GroupName)
 	d.Set("description", sg.Description)
 	d.Set("vpc_id", sg.VpcId)
 	d.Set("tags", tagsToMap(sg.Tags))
-	arn := arn.ARN{
-		Partition: meta.(*AWSClient).partition,
-		Service:   "ec2",
-		Region:    meta.(*AWSClient).region,
-		AccountID: *sg.OwnerId,
-		Resource:  fmt.Sprintf("security-group/%s", *sg.GroupId),
-	}.String()
-	d.Set("arn", arn)
+	d.Set("arn", fmt.Sprintf("arn:%s:ec2:%s:%s:security-group/%s",
+		meta.(*AWSClient).partition, meta.(*AWSClient).region, *sg.OwnerId, *sg.GroupId))
 
 	return nil
 }

@@ -5,7 +5,6 @@ import (
 	"log"
 
 	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/arn"
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/service/waf"
 	"github.com/aws/aws-sdk-go/service/wafregional"
@@ -20,25 +19,21 @@ func resourceAwsWafRegionalIPSet() *schema.Resource {
 		Delete: resourceAwsWafRegionalIPSetDelete,
 
 		Schema: map[string]*schema.Schema{
-			"name": {
+			"name": &schema.Schema{
 				Type:     schema.TypeString,
 				Required: true,
 				ForceNew: true,
 			},
-			"arn": {
-				Type:     schema.TypeString,
-				Computed: true,
-			},
-			"ip_set_descriptor": {
+			"ip_set_descriptor": &schema.Schema{
 				Type:     schema.TypeSet,
 				Optional: true,
 				Elem: &schema.Resource{
 					Schema: map[string]*schema.Schema{
-						"type": {
+						"type": &schema.Schema{
 							Type:     schema.TypeString,
 							Required: true,
 						},
-						"value": {
+						"value": &schema.Schema{
 							Type:     schema.TypeString,
 							Required: true,
 						},
@@ -79,7 +74,7 @@ func resourceAwsWafRegionalIPSetRead(d *schema.ResourceData, meta interface{}) e
 	resp, err := conn.GetIPSet(params)
 	if err != nil {
 		if awsErr, ok := err.(awserr.Error); ok && awsErr.Code() == "WAFNonexistentItemException" {
-			log.Printf("[WARN] WAF IPSet (%s) not found, removing from state", d.Id())
+			log.Printf("[WARN] WAF IPSet (%s) not found, error code (404)", d.Id())
 			d.SetId("")
 			return nil
 		}
@@ -90,20 +85,11 @@ func resourceAwsWafRegionalIPSetRead(d *schema.ResourceData, meta interface{}) e
 	d.Set("ip_set_descriptor", flattenWafIpSetDescriptorWR(resp.IPSet.IPSetDescriptors))
 	d.Set("name", resp.IPSet.Name)
 
-	arn := arn.ARN{
-		Partition: meta.(*AWSClient).partition,
-		Service:   "waf-regional",
-		Region:    meta.(*AWSClient).region,
-		AccountID: meta.(*AWSClient).accountid,
-		Resource:  fmt.Sprintf("ipset/%s", d.Id()),
-	}
-	d.Set("arn", arn.String())
-
 	return nil
 }
 
 func flattenWafIpSetDescriptorWR(in []*waf.IPSetDescriptor) []interface{} {
-	descriptors := make([]interface{}, len(in))
+	descriptors := make([]interface{}, len(in), len(in))
 
 	for i, descriptor := range in {
 		d := map[string]interface{}{
@@ -143,7 +129,7 @@ func resourceAwsWafRegionalIPSetDelete(d *schema.ResourceData, meta interface{})
 		err := updateIPSetResourceWR(d.Id(), oldD, noD, conn, region)
 
 		if err != nil {
-			return fmt.Errorf("Error Deleting IPSetDescriptors: %s", err)
+			return fmt.Errorf("Error Removing IPSetDescriptors: %s", err)
 		}
 	}
 
@@ -164,21 +150,20 @@ func resourceAwsWafRegionalIPSetDelete(d *schema.ResourceData, meta interface{})
 }
 
 func updateIPSetResourceWR(id string, oldD, newD []interface{}, conn *wafregional.WAFRegional, region string) error {
-	for _, ipSetUpdates := range diffWafIpSetDescriptors(oldD, newD) {
-		wr := newWafRegionalRetryer(conn, region)
-		_, err := wr.RetryWithToken(func(token *string) (interface{}, error) {
-			req := &waf.UpdateIPSetInput{
-				ChangeToken: token,
-				IPSetId:     aws.String(id),
-				Updates:     ipSetUpdates,
-			}
-			log.Printf("[INFO] Updating IPSet descriptor: %s", req)
 
-			return conn.UpdateIPSet(req)
-		})
-		if err != nil {
-			return fmt.Errorf("Error Updating WAF IPSet: %s", err)
+	wr := newWafRegionalRetryer(conn, region)
+	_, err := wr.RetryWithToken(func(token *string) (interface{}, error) {
+		req := &waf.UpdateIPSetInput{
+			ChangeToken: token,
+			IPSetId:     aws.String(id),
+			Updates:     diffWafIpSetDescriptors(oldD, newD),
 		}
+		log.Printf("[INFO] Updating IPSet descriptor: %s", req)
+
+		return conn.UpdateIPSet(req)
+	})
+	if err != nil {
+		return fmt.Errorf("Error Updating WAF IPSet: %s", err)
 	}
 
 	return nil

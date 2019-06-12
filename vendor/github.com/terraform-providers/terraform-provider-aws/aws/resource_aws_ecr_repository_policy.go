@@ -17,22 +17,18 @@ func resourceAwsEcrRepositoryPolicy() *schema.Resource {
 		Read:   resourceAwsEcrRepositoryPolicyRead,
 		Update: resourceAwsEcrRepositoryPolicyUpdate,
 		Delete: resourceAwsEcrRepositoryPolicyDelete,
-		Importer: &schema.ResourceImporter{
-			State: schema.ImportStatePassthrough,
-		},
 
 		Schema: map[string]*schema.Schema{
-			"repository": {
+			"repository": &schema.Schema{
 				Type:     schema.TypeString,
 				Required: true,
 				ForceNew: true,
 			},
-			"policy": {
-				Type:             schema.TypeString,
-				Required:         true,
-				DiffSuppressFunc: suppressEquivalentAwsPolicyDiffs,
+			"policy": &schema.Schema{
+				Type:     schema.TypeString,
+				Required: true,
 			},
-			"registry_id": {
+			"registry_id": &schema.Schema{
 				Type:     schema.TypeString,
 				Computed: true,
 			},
@@ -81,6 +77,7 @@ func resourceAwsEcrRepositoryPolicyRead(d *schema.ResourceData, meta interface{}
 
 	log.Printf("[DEBUG] Reading repository policy %s", d.Id())
 	out, err := conn.GetRepositoryPolicy(&ecr.GetRepositoryPolicyInput{
+		RegistryId:     aws.String(d.Get("registry_id").(string)),
 		RepositoryName: aws.String(d.Id()),
 	})
 	if err != nil {
@@ -101,9 +98,7 @@ func resourceAwsEcrRepositoryPolicyRead(d *schema.ResourceData, meta interface{}
 	repositoryPolicy := out
 
 	d.SetId(*repositoryPolicy.RepositoryName)
-	d.Set("repository", repositoryPolicy.RepositoryName)
 	d.Set("registry_id", repositoryPolicy.RegistryId)
-	d.Set("policy", repositoryPolicy.PolicyText)
 
 	return nil
 }
@@ -158,6 +153,7 @@ func resourceAwsEcrRepositoryPolicyDelete(d *schema.ResourceData, meta interface
 		if ecrerr, ok := err.(awserr.Error); ok {
 			switch ecrerr.Code() {
 			case "RepositoryNotFoundException", "RepositoryPolicyNotFoundException":
+				d.SetId("")
 				return nil
 			default:
 				return err

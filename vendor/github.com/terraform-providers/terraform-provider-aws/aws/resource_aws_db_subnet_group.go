@@ -9,7 +9,6 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/service/rds"
-
 	"github.com/hashicorp/terraform/helper/resource"
 	"github.com/hashicorp/terraform/helper/schema"
 )
@@ -25,12 +24,12 @@ func resourceAwsDbSubnetGroup() *schema.Resource {
 		},
 
 		Schema: map[string]*schema.Schema{
-			"arn": {
+			"arn": &schema.Schema{
 				Type:     schema.TypeString,
 				Computed: true,
 			},
 
-			"name": {
+			"name": &schema.Schema{
 				Type:          schema.TypeString,
 				Optional:      true,
 				Computed:      true,
@@ -38,22 +37,21 @@ func resourceAwsDbSubnetGroup() *schema.Resource {
 				ConflictsWith: []string{"name_prefix"},
 				ValidateFunc:  validateDbSubnetGroupName,
 			},
-			"name_prefix": {
-				Type:          schema.TypeString,
-				Optional:      true,
-				Computed:      true,
-				ForceNew:      true,
-				ConflictsWith: []string{"name"},
-				ValidateFunc:  validateDbSubnetGroupNamePrefix,
+			"name_prefix": &schema.Schema{
+				Type:         schema.TypeString,
+				Optional:     true,
+				Computed:     true,
+				ForceNew:     true,
+				ValidateFunc: validateDbSubnetGroupNamePrefix,
 			},
 
-			"description": {
+			"description": &schema.Schema{
 				Type:     schema.TypeString,
 				Optional: true,
 				Default:  "Managed by Terraform",
 			},
 
-			"subnet_ids": {
+			"subnet_ids": &schema.Schema{
 				Type:     schema.TypeSet,
 				Required: true,
 				Elem:     &schema.Schema{Type: schema.TypeString},
@@ -128,7 +126,7 @@ func resourceAwsDbSubnetGroupRead(d *schema.ResourceData, meta interface{}) erro
 		// AWS is down casing the name provided, so we compare lower case versions
 		// of the names. We lower case both our name and their name in the check,
 		// incase they change that someday.
-		if strings.EqualFold(d.Id(), *s.DBSubnetGroupName) {
+		if strings.ToLower(d.Id()) == strings.ToLower(*s.DBSubnetGroupName) {
 			subnetGroup = describeResp.DBSubnetGroups[0]
 		}
 	}
@@ -149,22 +147,25 @@ func resourceAwsDbSubnetGroupRead(d *schema.ResourceData, meta interface{}) erro
 	// list tags for resource
 	// set tags
 	conn := meta.(*AWSClient).rdsconn
-
-	arn := aws.StringValue(subnetGroup.DBSubnetGroupArn)
-	d.Set("arn", arn)
-	resp, err := conn.ListTagsForResource(&rds.ListTagsForResourceInput{
-		ResourceName: aws.String(arn),
-	})
-
+	arn, err := buildRDSsubgrpARN(d.Id(), meta.(*AWSClient).partition, meta.(*AWSClient).accountid, meta.(*AWSClient).region)
 	if err != nil {
-		log.Printf("[DEBUG] Error retreiving tags for ARN: %s", arn)
-	}
+		log.Printf("[DEBUG] Error building ARN for DB Subnet Group, not setting Tags for group %s", *subnetGroup.DBSubnetGroupName)
+	} else {
+		d.Set("arn", arn)
+		resp, err := conn.ListTagsForResource(&rds.ListTagsForResourceInput{
+			ResourceName: aws.String(arn),
+		})
 
-	var dt []*rds.Tag
-	if len(resp.TagList) > 0 {
-		dt = resp.TagList
+		if err != nil {
+			log.Printf("[DEBUG] Error retreiving tags for ARN: %s", arn)
+		}
+
+		var dt []*rds.Tag
+		if len(resp.TagList) > 0 {
+			dt = resp.TagList
+		}
+		d.Set("tags", tagsToMapRDS(dt))
 	}
-	d.Set("tags", tagsToMapRDS(dt))
 
 	return nil
 }
@@ -194,11 +195,12 @@ func resourceAwsDbSubnetGroupUpdate(d *schema.ResourceData, meta interface{}) er
 		}
 	}
 
-	arn := d.Get("arn").(string)
-	if err := setTagsRDS(conn, d, arn); err != nil {
-		return err
-	} else {
-		d.SetPartial("tags")
+	if arn, err := buildRDSsubgrpARN(d.Id(), meta.(*AWSClient).partition, meta.(*AWSClient).accountid, meta.(*AWSClient).region); err == nil {
+		if err := setTagsRDS(conn, d, arn); err != nil {
+			return err
+		} else {
+			d.SetPartial("tags")
+		}
 	}
 
 	return resourceAwsDbSubnetGroupRead(d, meta)
@@ -240,4 +242,16 @@ func resourceAwsDbSubnetGroupDeleteRefreshFunc(
 
 		return d, "destroyed", nil
 	}
+}
+
+func buildRDSsubgrpARN(identifier, partition, accountid, region string) (string, error) {
+	if partition == "" {
+		return "", fmt.Errorf("Unable to construct RDS ARN because of missing AWS partition")
+	}
+	if accountid == "" {
+		return "", fmt.Errorf("Unable to construct RDS ARN because of missing AWS Account ID")
+	}
+	arn := fmt.Sprintf("arn:%s:rds:%s:%s:subgrp:%s", partition, region, accountid, identifier)
+	return arn, nil
+
 }

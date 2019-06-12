@@ -1,7 +1,6 @@
 package aws
 
 import (
-	"fmt"
 	"log"
 	"strings"
 	"time"
@@ -9,6 +8,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/service/autoscaling"
+	"github.com/hashicorp/errwrap"
 	"github.com/hashicorp/terraform/helper/resource"
 	"github.com/hashicorp/terraform/helper/schema"
 )
@@ -67,10 +67,10 @@ func resourceAwsAutoscalingLifecycleHookPutOp(conn *autoscaling.AutoScaling, par
 		if err != nil {
 			if awsErr, ok := err.(awserr.Error); ok {
 				if strings.Contains(awsErr.Message(), "Unable to publish test message to notification target") {
-					return resource.RetryableError(fmt.Errorf("Retrying AWS AutoScaling Lifecycle Hook: %s", awsErr))
+					return resource.RetryableError(errwrap.Wrapf("[DEBUG] Retrying AWS AutoScaling Lifecycle Hook: {{err}}", awsErr))
 				}
 			}
-			return resource.NonRetryableError(fmt.Errorf("Error putting lifecycle hook: %s", err))
+			return resource.NonRetryableError(errwrap.Wrapf("Error putting lifecycle hook: {{err}}", err))
 		}
 		return nil
 	})
@@ -95,7 +95,6 @@ func resourceAwsAutoscalingLifecycleHookRead(d *schema.ResourceData, meta interf
 		return err
 	}
 	if p == nil {
-		log.Printf("[WARN] Autoscaling Lifecycle Hook (%s) not found, removing from state", d.Id())
 		d.SetId("")
 		return nil
 	}
@@ -128,9 +127,10 @@ func resourceAwsAutoscalingLifecycleHookDelete(d *schema.ResourceData, meta inte
 		LifecycleHookName:    aws.String(d.Get("name").(string)),
 	}
 	if _, err := autoscalingconn.DeleteLifecycleHook(&params); err != nil {
-		return fmt.Errorf("Autoscaling Lifecycle Hook: %s", err)
+		return errwrap.Wrapf("Autoscaling Lifecycle Hook: {{err}}", err)
 	}
 
+	d.SetId("")
 	return nil
 }
 
@@ -178,7 +178,7 @@ func getAwsAutoscalingLifecycleHook(d *schema.ResourceData, meta interface{}) (*
 	log.Printf("[DEBUG] AutoScaling Lifecycle Hook Describe Params: %#v", params)
 	resp, err := autoscalingconn.DescribeLifecycleHooks(&params)
 	if err != nil {
-		return nil, fmt.Errorf("Error retrieving lifecycle hooks: %s", err)
+		return nil, errwrap.Wrapf("Error retrieving lifecycle hooks: {{err}}", err)
 	}
 
 	// find lifecycle hooks

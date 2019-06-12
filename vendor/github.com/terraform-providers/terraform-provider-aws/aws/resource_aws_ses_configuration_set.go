@@ -19,7 +19,7 @@ func resourceAwsSesConfigurationSet() *schema.Resource {
 		},
 
 		Schema: map[string]*schema.Schema{
-			"name": {
+			"name": &schema.Schema{
 				Type:     schema.TypeString,
 				Required: true,
 				ForceNew: true,
@@ -75,7 +75,11 @@ func resourceAwsSesConfigurationSetDelete(d *schema.ResourceData, meta interface
 		ConfigurationSetName: aws.String(d.Id()),
 	})
 
-	return err
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func findConfigurationSet(name string, token *string, meta interface{}) (bool, error) {

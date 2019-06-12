@@ -28,24 +28,19 @@ func resourceAwsNetworkInterface() *schema.Resource {
 
 		Schema: map[string]*schema.Schema{
 
-			"subnet_id": {
+			"subnet_id": &schema.Schema{
 				Type:     schema.TypeString,
 				Required: true,
 				ForceNew: true,
 			},
 
-			"private_ip": {
+			"private_ip": &schema.Schema{
 				Type:     schema.TypeString,
 				Optional: true,
 				Computed: true,
 			},
 
-			"private_dns_name": {
-				Type:     schema.TypeString,
-				Computed: true,
-			},
-
-			"private_ips": {
+			"private_ips": &schema.Schema{
 				Type:     schema.TypeSet,
 				Optional: true,
 				Computed: true,
@@ -53,13 +48,13 @@ func resourceAwsNetworkInterface() *schema.Resource {
 				Set:      schema.HashString,
 			},
 
-			"private_ips_count": {
+			"private_ips_count": &schema.Schema{
 				Type:     schema.TypeInt,
 				Optional: true,
 				Computed: true,
 			},
 
-			"security_groups": {
+			"security_groups": &schema.Schema{
 				Type:     schema.TypeSet,
 				Optional: true,
 				Computed: true,
@@ -67,32 +62,32 @@ func resourceAwsNetworkInterface() *schema.Resource {
 				Set:      schema.HashString,
 			},
 
-			"source_dest_check": {
+			"source_dest_check": &schema.Schema{
 				Type:     schema.TypeBool,
 				Optional: true,
 				Default:  true,
 			},
 
-			"description": {
+			"description": &schema.Schema{
 				Type:     schema.TypeString,
 				Optional: true,
 			},
 
-			"attachment": {
+			"attachment": &schema.Schema{
 				Type:     schema.TypeSet,
 				Optional: true,
 				Computed: true,
 				Elem: &schema.Resource{
 					Schema: map[string]*schema.Schema{
-						"instance": {
+						"instance": &schema.Schema{
 							Type:     schema.TypeString,
 							Required: true,
 						},
-						"device_index": {
+						"device_index": &schema.Schema{
 							Type:     schema.TypeInt,
 							Required: true,
 						},
-						"attachment_id": {
+						"attachment_id": &schema.Schema{
 							Type:     schema.TypeString,
 							Computed: true,
 						},
@@ -165,36 +160,24 @@ func resourceAwsNetworkInterfaceRead(d *schema.ResourceData, meta interface{}) e
 	}
 
 	eni := describeResp.NetworkInterfaces[0]
+	d.Set("subnet_id", eni.SubnetId)
+	d.Set("private_ip", eni.PrivateIpAddress)
+	d.Set("private_ips", flattenNetworkInterfacesPrivateIPAddresses(eni.PrivateIpAddresses))
+	d.Set("security_groups", flattenGroupIdentifiers(eni.Groups))
+	d.Set("source_dest_check", eni.SourceDestCheck)
 
-	attachment := []map[string]interface{}{}
+	if eni.Description != nil {
+		d.Set("description", eni.Description)
+	}
+
+	// Tags
+	d.Set("tags", tagsToMap(eni.TagSet))
 
 	if eni.Attachment != nil {
-		attachment = []map[string]interface{}{flattenAttachment(eni.Attachment)}
-	}
-
-	if err := d.Set("attachment", attachment); err != nil {
-		return fmt.Errorf("error setting attachment: %s", err)
-	}
-
-	d.Set("description", eni.Description)
-	d.Set("private_dns_name", eni.PrivateDnsName)
-	d.Set("private_ip", eni.PrivateIpAddress)
-
-	if err := d.Set("private_ips", flattenNetworkInterfacesPrivateIPAddresses(eni.PrivateIpAddresses)); err != nil {
-		return fmt.Errorf("error setting private_ips: %s", err)
-	}
-
-	d.Set("private_ips_count", len(eni.PrivateIpAddresses)-1)
-
-	if err := d.Set("security_groups", flattenGroupIdentifiers(eni.Groups)); err != nil {
-		return fmt.Errorf("error setting security_groups: %s", err)
-	}
-
-	d.Set("source_dest_check", eni.SourceDestCheck)
-	d.Set("subnet_id", eni.SubnetId)
-
-	if err := d.Set("tags", tagsToMap(eni.TagSet)); err != nil {
-		return fmt.Errorf("error setting tags: %s", err)
+		attachment := []map[string]interface{}{flattenAttachment(eni.Attachment)}
+		d.Set("attachment", attachment)
+	} else {
+		d.Set("attachment", nil)
 	}
 
 	return nil
@@ -236,7 +219,7 @@ func resourceAwsNetworkInterfaceDetach(oa *schema.Set, meta interface{}, eniId s
 			}
 		}
 
-		log.Printf("[DEBUG] Waiting for ENI (%s) to become detached", eniId)
+		log.Printf("[DEBUG] Waiting for ENI (%s) to become dettached", eniId)
 		stateConf := &resource.StateChangeConf{
 			Pending: []string{"true"},
 			Target:  []string{"false"},
@@ -245,7 +228,7 @@ func resourceAwsNetworkInterfaceDetach(oa *schema.Set, meta interface{}, eniId s
 		}
 		if _, err := stateConf.WaitForState(); err != nil {
 			return fmt.Errorf(
-				"Error waiting for ENI (%s) to become detached: %s", eniId, err)
+				"Error waiting for ENI (%s) to become dettached: %s", eniId, err)
 		}
 	}
 
@@ -335,7 +318,7 @@ func resourceAwsNetworkInterfaceUpdate(d *schema.ResourceData, meta interface{})
 
 	d.SetPartial("source_dest_check")
 
-	if d.HasChange("private_ips_count") && !d.IsNewResource() {
+	if d.HasChange("private_ips_count") {
 		o, n := d.GetChange("private_ips_count")
 		private_ips := d.Get("private_ips").(*schema.Set).List()
 		private_ips_filtered := private_ips[:0]
@@ -347,7 +330,7 @@ func resourceAwsNetworkInterfaceUpdate(d *schema.ResourceData, meta interface{})
 			}
 		}
 
-		if o != nil && n != nil && n != len(private_ips_filtered) {
+		if o != nil && o != 0 && n != nil && n != len(private_ips_filtered) {
 
 			diff := n.(int) - o.(int)
 

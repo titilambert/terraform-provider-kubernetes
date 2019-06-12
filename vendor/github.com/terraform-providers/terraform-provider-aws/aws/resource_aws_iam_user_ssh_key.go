@@ -3,14 +3,12 @@ package aws
 import (
 	"fmt"
 	"log"
-	"strings"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/service/iam"
 
 	"github.com/hashicorp/terraform/helper/schema"
-	"github.com/hashicorp/terraform/helper/validation"
 )
 
 func resourceAwsIamUserSshKey() *schema.Resource {
@@ -19,48 +17,33 @@ func resourceAwsIamUserSshKey() *schema.Resource {
 		Read:   resourceAwsIamUserSshKeyRead,
 		Update: resourceAwsIamUserSshKeyUpdate,
 		Delete: resourceAwsIamUserSshKeyDelete,
-		Importer: &schema.ResourceImporter{
-			State: resourceAwsIamUserSshKeyImport,
-		},
 
 		Schema: map[string]*schema.Schema{
-			"ssh_public_key_id": {
+			"ssh_public_key_id": &schema.Schema{
 				Type:     schema.TypeString,
 				Computed: true,
 			},
-			"fingerprint": {
+			"fingerprint": &schema.Schema{
 				Type:     schema.TypeString,
 				Computed: true,
 			},
-			"username": {
+			"username": &schema.Schema{
 				Type:     schema.TypeString,
 				Required: true,
 				ForceNew: true,
 			},
-			"public_key": {
+			"public_key": &schema.Schema{
 				Type:     schema.TypeString,
 				Required: true,
-				ForceNew: true,
-				DiffSuppressFunc: func(k, old, new string, d *schema.ResourceData) bool {
-					if d.Get("encoding").(string) == "SSH" {
-						old = cleanSshKey(old)
-						new = cleanSshKey(new)
-					}
-					return strings.Trim(old, "\n") == strings.Trim(new, "\n")
-				},
 			},
 
-			"encoding": {
-				Type:     schema.TypeString,
-				Required: true,
-				ForceNew: true,
-				ValidateFunc: validation.StringInSlice([]string{
-					iam.EncodingTypeSsh,
-					iam.EncodingTypePem,
-				}, false),
+			"encoding": &schema.Schema{
+				Type:         schema.TypeString,
+				Required:     true,
+				ValidateFunc: validateIamUserSSHKeyEncoding,
 			},
 
-			"status": {
+			"status": &schema.Schema{
 				Type:     schema.TypeString,
 				Optional: true,
 				Computed: true,
@@ -85,19 +68,19 @@ func resourceAwsIamUserSshKeyCreate(d *schema.ResourceData, meta interface{}) er
 		return fmt.Errorf("Error creating IAM User SSH Key %s: %s", username, err)
 	}
 
+	d.Set("ssh_public_key_id", createResp.SSHPublicKey.SSHPublicKeyId)
 	d.SetId(*createResp.SSHPublicKey.SSHPublicKeyId)
 
-	return resourceAwsIamUserSshKeyUpdate(d, meta)
+	return resourceAwsIamUserSshKeyRead(d, meta)
 }
 
 func resourceAwsIamUserSshKeyRead(d *schema.ResourceData, meta interface{}) error {
 	iamconn := meta.(*AWSClient).iamconn
 	username := d.Get("username").(string)
-	encoding := d.Get("encoding").(string)
 	request := &iam.GetSSHPublicKeyInput{
 		UserName:       aws.String(username),
 		SSHPublicKeyId: aws.String(d.Id()),
-		Encoding:       aws.String(encoding),
+		Encoding:       aws.String(d.Get("encoding").(string)),
 	}
 
 	getResp, err := iamconn.GetSSHPublicKey(request)
@@ -110,15 +93,9 @@ func resourceAwsIamUserSshKeyRead(d *schema.ResourceData, meta interface{}) erro
 		return fmt.Errorf("Error reading IAM User SSH Key %s: %s", d.Id(), err)
 	}
 
-	publicKey := *getResp.SSHPublicKey.SSHPublicKeyBody
-	if encoding == "SSH" {
-		publicKey = cleanSshKey(publicKey)
-	}
-
 	d.Set("fingerprint", getResp.SSHPublicKey.Fingerprint)
 	d.Set("status", getResp.SSHPublicKey.Status)
-	d.Set("ssh_public_key_id", getResp.SSHPublicKey.SSHPublicKeyId)
-	d.Set("public_key", publicKey)
+
 	return nil
 }
 
@@ -142,8 +119,9 @@ func resourceAwsIamUserSshKeyUpdate(d *schema.ResourceData, meta interface{}) er
 			}
 			return fmt.Errorf("Error updating IAM User SSH Key %s: %s", d.Id(), err)
 		}
+		return resourceAwsIamUserRead(d, meta)
 	}
-	return resourceAwsIamUserSshKeyRead(d, meta)
+	return nil
 }
 
 func resourceAwsIamUserSshKeyDelete(d *schema.ResourceData, meta interface{}) error {
@@ -161,31 +139,15 @@ func resourceAwsIamUserSshKeyDelete(d *schema.ResourceData, meta interface{}) er
 	return nil
 }
 
-func resourceAwsIamUserSshKeyImport(d *schema.ResourceData, meta interface{}) ([]*schema.ResourceData, error) {
-	idParts := strings.SplitN(d.Id(), ":", 3)
-
-	if len(idParts) != 3 || idParts[0] == "" || idParts[1] == "" || idParts[2] == "" {
-		return nil, fmt.Errorf("unexpected format of ID (%q), UserName:SSHPublicKeyId:Encoding", d.Id())
+func validateIamUserSSHKeyEncoding(v interface{}, k string) (ws []string, errors []error) {
+	value := v.(string)
+	encodingTypes := map[string]bool{
+		"PEM": true,
+		"SSH": true,
 	}
 
-	username := idParts[0]
-	sshPublicKeyId := idParts[1]
-	encoding := idParts[2]
-
-	d.Set("username", username)
-	d.Set("ssh_public_key_id", sshPublicKeyId)
-	d.Set("encoding", encoding)
-	d.SetId(sshPublicKeyId)
-
-	return []*schema.ResourceData{d}, nil
-}
-
-func cleanSshKey(key string) string {
-	// Remove comments from SSH Keys
-	// Comments are anything after "ssh-rsa XXXX" where XXXX is the key.
-	parts := strings.Split(key, " ")
-	if len(parts) > 2 {
-		parts = parts[0:2]
+	if !encodingTypes[value] {
+		errors = append(errors, fmt.Errorf("IAM User SSH Key Encoding can only be PEM or SSH"))
 	}
-	return strings.Join(parts, " ")
+	return
 }

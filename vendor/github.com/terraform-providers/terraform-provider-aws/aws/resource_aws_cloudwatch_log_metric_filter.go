@@ -7,7 +7,6 @@ import (
 
 	"github.com/hashicorp/terraform/helper/resource"
 	"github.com/hashicorp/terraform/helper/schema"
-	"github.com/hashicorp/terraform/helper/validation"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
@@ -22,17 +21,17 @@ func resourceAwsCloudWatchLogMetricFilter() *schema.Resource {
 		Delete: resourceAwsCloudWatchLogMetricFilterDelete,
 
 		Schema: map[string]*schema.Schema{
-			"name": {
+			"name": &schema.Schema{
 				Type:         schema.TypeString,
 				Required:     true,
 				ForceNew:     true,
 				ValidateFunc: validateLogMetricFilterName,
 			},
 
-			"pattern": {
+			"pattern": &schema.Schema{
 				Type:         schema.TypeString,
 				Required:     true,
-				ValidateFunc: validation.StringLenBetween(0, 1024),
+				ValidateFunc: validateMaxLength(512),
 				StateFunc: func(v interface{}) string {
 					s, ok := v.(string)
 					if !ok {
@@ -42,38 +41,33 @@ func resourceAwsCloudWatchLogMetricFilter() *schema.Resource {
 				},
 			},
 
-			"log_group_name": {
+			"log_group_name": &schema.Schema{
 				Type:         schema.TypeString,
 				Required:     true,
 				ForceNew:     true,
 				ValidateFunc: validateLogGroupName,
 			},
 
-			"metric_transformation": {
+			"metric_transformation": &schema.Schema{
 				Type:     schema.TypeList,
 				Required: true,
 				MaxItems: 1,
 				Elem: &schema.Resource{
 					Schema: map[string]*schema.Schema{
-						"name": {
+						"name": &schema.Schema{
 							Type:         schema.TypeString,
 							Required:     true,
 							ValidateFunc: validateLogMetricFilterTransformationName,
 						},
-						"namespace": {
+						"namespace": &schema.Schema{
 							Type:         schema.TypeString,
 							Required:     true,
 							ValidateFunc: validateLogMetricFilterTransformationName,
 						},
-						"value": {
+						"value": &schema.Schema{
 							Type:         schema.TypeString,
 							Required:     true,
-							ValidateFunc: validation.StringLenBetween(0, 100),
-						},
-						"default_value": {
-							Type:         schema.TypeString,
-							Optional:     true,
-							ValidateFunc: validateTypeStringNullableFloat,
+							ValidateFunc: validateMaxLength(100),
 						},
 					},
 				},
@@ -93,14 +87,8 @@ func resourceAwsCloudWatchLogMetricFilterUpdate(d *schema.ResourceData, meta int
 
 	transformations := d.Get("metric_transformation").([]interface{})
 	o := transformations[0].(map[string]interface{})
-	input.MetricTransformations = expandCloudWatchLogMetricTransformations(o)
+	input.MetricTransformations = expandCloudWachLogMetricTransformations(o)
 
-	// Creating multiple filters on the same log group can sometimes cause
-	// clashes, so use a mutex here (and on deletion) to serialise actions on
-	// log groups.
-	mutex_key := fmt.Sprintf(`log-group-%s`, d.Get(`log_group_name`))
-	awsMutexKV.Lock(mutex_key)
-	defer awsMutexKV.Unlock(mutex_key)
 	log.Printf("[DEBUG] Creating/Updating CloudWatch Log Metric Filter: %s", input)
 	_, err := conn.PutMetricFilter(&input)
 	if err != nil {
@@ -133,7 +121,7 @@ func resourceAwsCloudWatchLogMetricFilterRead(d *schema.ResourceData, meta inter
 
 	d.Set("name", mf.FilterName)
 	d.Set("pattern", mf.FilterPattern)
-	d.Set("metric_transformation", flattenCloudWatchLogMetricTransformations(mf.MetricTransformations))
+	d.Set("metric_transformation", flattenCloudWachLogMetricTransformations(mf.MetricTransformations))
 
 	return nil
 }
@@ -186,18 +174,14 @@ func resourceAwsCloudWatchLogMetricFilterDelete(d *schema.ResourceData, meta int
 		FilterName:   aws.String(d.Get("name").(string)),
 		LogGroupName: aws.String(d.Get("log_group_name").(string)),
 	}
-	// Creating multiple filters on the same log group can sometimes cause
-	// clashes, so use a mutex here (and on creation) to serialise actions on
-	// log groups.
-	mutex_key := fmt.Sprintf(`log-group-%s`, d.Get(`log_group_name`))
-	awsMutexKV.Lock(mutex_key)
-	defer awsMutexKV.Unlock(mutex_key)
 	log.Printf("[INFO] Deleting CloudWatch Log Metric Filter: %s", d.Id())
 	_, err := conn.DeleteMetricFilter(&input)
 	if err != nil {
 		return fmt.Errorf("Error deleting CloudWatch Log Metric Filter: %s", err)
 	}
 	log.Println("[INFO] CloudWatch Log Metric Filter deleted")
+
+	d.SetId("")
 
 	return nil
 }

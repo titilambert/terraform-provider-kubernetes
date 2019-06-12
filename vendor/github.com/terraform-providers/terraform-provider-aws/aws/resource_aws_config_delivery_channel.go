@@ -7,7 +7,6 @@ import (
 
 	"github.com/hashicorp/terraform/helper/resource"
 	"github.com/hashicorp/terraform/helper/schema"
-	"github.com/hashicorp/terraform/helper/validation"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
@@ -31,7 +30,7 @@ func resourceAwsConfigDeliveryChannel() *schema.Resource {
 				Optional:     true,
 				ForceNew:     true,
 				Default:      "default",
-				ValidateFunc: validation.StringLenBetween(0, 256),
+				ValidateFunc: validateMaxLength(256),
 			},
 			"s3_bucket_name": {
 				Type:     schema.TypeString,
@@ -55,7 +54,7 @@ func resourceAwsConfigDeliveryChannel() *schema.Resource {
 						"delivery_frequency": {
 							Type:         schema.TypeString,
 							Optional:     true,
-							ValidateFunc: validateConfigExecutionFrequency(),
+							ValidateFunc: validateConfigExecutionFrequency,
 						},
 					},
 				},
@@ -163,21 +162,11 @@ func resourceAwsConfigDeliveryChannelDelete(d *schema.ResourceData, meta interfa
 	input := configservice.DeleteDeliveryChannelInput{
 		DeliveryChannelName: aws.String(d.Id()),
 	}
-
-	err := resource.Retry(30*time.Second, func() *resource.RetryError {
-		_, err := conn.DeleteDeliveryChannel(&input)
-		if err != nil {
-			if isAWSErr(err, configservice.ErrCodeLastDeliveryChannelDeleteFailedException, "there is a running configuration recorder") {
-				return resource.RetryableError(err)
-			}
-
-			return resource.NonRetryableError(err)
-		}
-		return nil
-	})
+	_, err := conn.DeleteDeliveryChannel(&input)
 	if err != nil {
 		return fmt.Errorf("Unable to delete delivery channel: %s", err)
 	}
 
+	d.SetId("")
 	return nil
 }

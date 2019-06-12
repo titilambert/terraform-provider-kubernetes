@@ -2,13 +2,13 @@ package aws
 
 import (
 	"fmt"
-	"log"
 	"net/url"
 	"regexp"
-	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/service/iam"
+
 	"github.com/hashicorp/terraform/helper/resource"
 	"github.com/hashicorp/terraform/helper/schema"
 )
@@ -54,7 +54,7 @@ func resourceAwsIamPolicy() *schema.Resource {
 						errors = append(errors, fmt.Errorf(
 							"%q cannot be longer than 128 characters", k))
 					}
-					if !regexp.MustCompile(`^[\w+=,.@-]*$`).MatchString(value) {
+					if !regexp.MustCompile("^[\\w+=,.@-]*$").MatchString(value) {
 						errors = append(errors, fmt.Errorf(
 							"%q must match [\\w+=,.@-]", k))
 					}
@@ -62,10 +62,9 @@ func resourceAwsIamPolicy() *schema.Resource {
 				},
 			},
 			"name_prefix": {
-				Type:          schema.TypeString,
-				Optional:      true,
-				ForceNew:      true,
-				ConflictsWith: []string{"name"},
+				Type:     schema.TypeString,
+				Optional: true,
+				ForceNew: true,
 				ValidateFunc: func(v interface{}, k string) (ws []string, errors []error) {
 					// https://github.com/boto/botocore/blob/2485f5c/botocore/data/iam/2010-05-08/service-2.json#L8329-L8334
 					value := v.(string)
@@ -73,7 +72,7 @@ func resourceAwsIamPolicy() *schema.Resource {
 						errors = append(errors, fmt.Errorf(
 							"%q cannot be longer than 96 characters, name is limited to 128", k))
 					}
-					if !regexp.MustCompile(`^[\w+=,.@-]*$`).MatchString(value) {
+					if !regexp.MustCompile("^[\\w+=,.@-]*$").MatchString(value) {
 						errors = append(errors, fmt.Errorf(
 							"%q must match [\\w+=,.@-]", k))
 					}
@@ -112,9 +111,7 @@ func resourceAwsIamPolicyCreate(d *schema.ResourceData, meta interface{}) error 
 		return fmt.Errorf("Error creating IAM policy %s: %s", name, err)
 	}
 
-	d.SetId(*response.Policy.Arn)
-
-	return resourceAwsIamPolicyRead(d, meta)
+	return readIamPolicy(d, response.Policy)
 }
 
 func resourceAwsIamPolicyRead(d *schema.ResourceData, meta interface{}) error {
@@ -123,93 +120,39 @@ func resourceAwsIamPolicyRead(d *schema.ResourceData, meta interface{}) error {
 	getPolicyRequest := &iam.GetPolicyInput{
 		PolicyArn: aws.String(d.Id()),
 	}
-	log.Printf("[DEBUG] Getting IAM Policy: %s", getPolicyRequest)
 
-	// Handle IAM eventual consistency
-	var getPolicyResponse *iam.GetPolicyOutput
-	err := resource.Retry(1*time.Minute, func() *resource.RetryError {
-		var err error
-		getPolicyResponse, err = iamconn.GetPolicy(getPolicyRequest)
-
-		if d.IsNewResource() && isAWSErr(err, iam.ErrCodeNoSuchEntityException, "") {
-			return resource.RetryableError(err)
-		}
-
-		if err != nil {
-			return resource.NonRetryableError(err)
-		}
-
-		return nil
-	})
-
-	if isAWSErr(err, iam.ErrCodeNoSuchEntityException, "") {
-		log.Printf("[WARN] IAM Policy (%s) not found, removing from state", d.Id())
-		d.SetId("")
-		return nil
-	}
-
+	getPolicyResponse, err := iamconn.GetPolicy(getPolicyRequest)
 	if err != nil {
+		if iamerr, ok := err.(awserr.Error); ok && iamerr.Code() == "NoSuchEntity" {
+			d.SetId("")
+			return nil
+		}
 		return fmt.Errorf("Error reading IAM policy %s: %s", d.Id(), err)
 	}
-
-	if getPolicyResponse == nil || getPolicyResponse.Policy == nil {
-		log.Printf("[WARN] IAM Policy (%s) not found, removing from state", d.Id())
-		d.SetId("")
-		return nil
-	}
-
-	d.Set("arn", getPolicyResponse.Policy.Arn)
-	d.Set("description", getPolicyResponse.Policy.Description)
-	d.Set("name", getPolicyResponse.Policy.PolicyName)
-	d.Set("path", getPolicyResponse.Policy.Path)
-
-	// Retrieve policy
 
 	getPolicyVersionRequest := &iam.GetPolicyVersionInput{
 		PolicyArn: aws.String(d.Id()),
 		VersionId: getPolicyResponse.Policy.DefaultVersionId,
 	}
-	log.Printf("[DEBUG] Getting IAM Policy Version: %s", getPolicyVersionRequest)
 
-	// Handle IAM eventual consistency
-	var getPolicyVersionResponse *iam.GetPolicyVersionOutput
-	err = resource.Retry(1*time.Minute, func() *resource.RetryError {
-		var err error
-		getPolicyVersionResponse, err = iamconn.GetPolicyVersion(getPolicyVersionRequest)
-
-		if isAWSErr(err, iam.ErrCodeNoSuchEntityException, "") {
-			return resource.RetryableError(err)
-		}
-
-		if err != nil {
-			return resource.NonRetryableError(err)
-		}
-
-		return nil
-	})
-
-	if isAWSErr(err, iam.ErrCodeNoSuchEntityException, "") {
-		log.Printf("[WARN] IAM Policy (%s) not found, removing from state", d.Id())
-		d.SetId("")
-		return nil
-	}
-
+	getPolicyVersionResponse, err := iamconn.GetPolicyVersion(getPolicyVersionRequest)
 	if err != nil {
+		if iamerr, ok := err.(awserr.Error); ok && iamerr.Code() == "NoSuchEntity" {
+			d.SetId("")
+			return nil
+		}
 		return fmt.Errorf("Error reading IAM policy version %s: %s", d.Id(), err)
 	}
 
-	policy := ""
-	if getPolicyVersionResponse != nil && getPolicyVersionResponse.PolicyVersion != nil {
-		var err error
-		policy, err = url.QueryUnescape(aws.StringValue(getPolicyVersionResponse.PolicyVersion.Document))
-		if err != nil {
-			return fmt.Errorf("error parsing policy: %s", err)
-		}
+	policy, err := url.QueryUnescape(*getPolicyVersionResponse.PolicyVersion.Document)
+	if err != nil {
+		return err
+	}
+	if err := d.Set("policy", policy); err != nil {
+		return err
 	}
 
-	d.Set("policy", policy)
-
-	return nil
+	return readIamPolicy(d, getPolicyResponse.Policy)
 }
 
 func resourceAwsIamPolicyUpdate(d *schema.ResourceData, meta interface{}) error {
@@ -219,6 +162,9 @@ func resourceAwsIamPolicyUpdate(d *schema.ResourceData, meta interface{}) error 
 		return err
 	}
 
+	if !d.HasChange("policy") {
+		return nil
+	}
 	request := &iam.CreatePolicyVersionInput{
 		PolicyArn:      aws.String(d.Id()),
 		PolicyDocument: aws.String(d.Get("policy").(string)),
@@ -228,8 +174,7 @@ func resourceAwsIamPolicyUpdate(d *schema.ResourceData, meta interface{}) error 
 	if _, err := iamconn.CreatePolicyVersion(request); err != nil {
 		return fmt.Errorf("Error updating IAM policy %s: %s", d.Id(), err)
 	}
-
-	return resourceAwsIamPolicyRead(d, meta)
+	return nil
 }
 
 func resourceAwsIamPolicyDelete(d *schema.ResourceData, meta interface{}) error {
@@ -243,13 +188,13 @@ func resourceAwsIamPolicyDelete(d *schema.ResourceData, meta interface{}) error 
 		PolicyArn: aws.String(d.Id()),
 	}
 
-	if _, err := iamconn.DeletePolicy(request); err != nil {
-		if isAWSErr(err, iam.ErrCodeNoSuchEntityException, "") {
+	_, err := iamconn.DeletePolicy(request)
+	if err != nil {
+		if iamerr, ok := err.(awserr.Error); ok && iamerr.Code() == "NoSuchEntity" {
 			return nil
 		}
-		return fmt.Errorf("Error deleting IAM policy %s: %s", d.Id(), err)
+		return fmt.Errorf("Error deleting IAM policy %s: %#v", d.Id(), err)
 	}
-
 	return nil
 }
 
@@ -281,8 +226,10 @@ func iamPolicyPruneVersions(arn string, iamconn *iam.IAM) error {
 		}
 	}
 
-	err1 := iamPolicyDeleteVersion(arn, *oldestVersion.VersionId, iamconn)
-	return err1
+	if err := iamPolicyDeleteVersion(arn, *oldestVersion.VersionId, iamconn); err != nil {
+		return err
+	}
+	return nil
 }
 
 func iamPolicyDeleteNondefaultVersions(arn string, iamconn *iam.IAM) error {
@@ -326,4 +273,24 @@ func iamPolicyListVersions(arn string, iamconn *iam.IAM) ([]*iam.PolicyVersion, 
 		return nil, fmt.Errorf("Error listing versions for IAM policy %s: %s", arn, err)
 	}
 	return response.Versions, nil
+}
+
+func readIamPolicy(d *schema.ResourceData, policy *iam.Policy) error {
+	d.SetId(*policy.Arn)
+	if policy.Description != nil {
+		// the description isn't present in the response to CreatePolicy.
+		if err := d.Set("description", policy.Description); err != nil {
+			return err
+		}
+	}
+	if err := d.Set("path", policy.Path); err != nil {
+		return err
+	}
+	if err := d.Set("name", policy.PolicyName); err != nil {
+		return err
+	}
+	if err := d.Set("arn", policy.Arn); err != nil {
+		return err
+	}
+	return nil
 }

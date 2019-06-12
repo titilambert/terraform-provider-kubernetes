@@ -16,9 +16,6 @@ func resourceAwsElasticTranscoderPreset() *schema.Resource {
 		Create: resourceAwsElasticTranscoderPresetCreate,
 		Read:   resourceAwsElasticTranscoderPresetRead,
 		Delete: resourceAwsElasticTranscoderPresetDelete,
-		Importer: &schema.ResourceImporter{
-			State: schema.ImportStatePassthrough,
-		},
 
 		Schema: map[string]*schema.Schema{
 			"arn": {
@@ -327,7 +324,7 @@ func resourceAwsElasticTranscoderPresetCreate(d *schema.ResourceData, meta inter
 		Container:   aws.String(d.Get("container").(string)),
 		Description: getStringPtr(d, "description"),
 		Thumbnails:  expandETThumbnails(d),
-		Video:       expandETVideoParams(d),
+		Video:       exapandETVideoParams(d),
 	}
 
 	if name, ok := d.GetOk("name"); ok {
@@ -418,7 +415,7 @@ func expandETAudioCodecOptions(d *schema.ResourceData) *elastictranscoder.AudioC
 	return codecOpts
 }
 
-func expandETVideoParams(d *schema.ResourceData) *elastictranscoder.VideoParameters {
+func exapandETVideoParams(d *schema.ResourceData) *elastictranscoder.VideoParameters {
 	s := d.Get("video").(*schema.Set)
 	if s == nil || s.Len() == 0 {
 		return nil
@@ -503,7 +500,6 @@ func resourceAwsElasticTranscoderPresetRead(d *schema.ResourceData, meta interfa
 
 	d.Set("container", *preset.Container)
 	d.Set("name", *preset.Name)
-	d.Set("description", *preset.Description)
 
 	if preset.Thumbnails != nil {
 		err := d.Set("thumbnails", flattenETThumbnails(preset.Thumbnails))
@@ -594,14 +590,14 @@ func flattenETVideoParams(video *elastictranscoder.VideoParameters) []map[string
 	return m.MapList()
 }
 
-func flattenETVideoCodecOptions(opts map[string]*string) map[string]interface{} {
+func flattenETVideoCodecOptions(opts map[string]*string) []map[string]interface{} {
 	codecOpts := setMap(make(map[string]interface{}))
 
 	for k, v := range opts {
 		codecOpts.SetString(k, v)
 	}
 
-	return codecOpts.Map()
+	return codecOpts.MapList()
 }
 
 func flattenETWatermarks(watermarks []*elastictranscoder.PresetWatermark) []map[string]interface{} {

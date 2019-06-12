@@ -11,7 +11,6 @@ import (
 	"github.com/aws/aws-sdk-go/service/codepipeline"
 	"github.com/hashicorp/terraform/helper/resource"
 	"github.com/hashicorp/terraform/helper/schema"
-	"github.com/hashicorp/terraform/helper/validation"
 )
 
 func resourceAwsCodePipeline() *schema.Resource {
@@ -25,11 +24,6 @@ func resourceAwsCodePipeline() *schema.Resource {
 		},
 
 		Schema: map[string]*schema.Schema{
-			"arn": {
-				Type:     schema.TypeString,
-				Computed: true,
-			},
-
 			"name": {
 				Type:     schema.TypeString,
 				Required: true,
@@ -53,11 +47,9 @@ func resourceAwsCodePipeline() *schema.Resource {
 						},
 
 						"type": {
-							Type:     schema.TypeString,
-							Required: true,
-							ValidateFunc: validation.StringInSlice([]string{
-								codepipeline.ArtifactStoreTypeS3,
-							}, false),
+							Type:         schema.TypeString,
+							Required:     true,
+							ValidateFunc: validateAwsCodePipelineArtifactStoreType,
 						},
 
 						"encryption_key": {
@@ -72,11 +64,9 @@ func resourceAwsCodePipeline() *schema.Resource {
 									},
 
 									"type": {
-										Type:     schema.TypeString,
-										Required: true,
-										ValidateFunc: validation.StringInSlice([]string{
-											codepipeline.EncryptionKeyTypeKms,
-										}, false),
+										Type:         schema.TypeString,
+										Required:     true,
+										ValidateFunc: validateAwsCodePipelineEncryptionKeyType,
 									},
 								},
 							},
@@ -104,25 +94,14 @@ func resourceAwsCodePipeline() *schema.Resource {
 										Optional: true,
 									},
 									"category": {
-										Type:     schema.TypeString,
-										Required: true,
-										ValidateFunc: validation.StringInSlice([]string{
-											codepipeline.ActionCategorySource,
-											codepipeline.ActionCategoryBuild,
-											codepipeline.ActionCategoryDeploy,
-											codepipeline.ActionCategoryTest,
-											codepipeline.ActionCategoryInvoke,
-											codepipeline.ActionCategoryApproval,
-										}, false),
+										Type:         schema.TypeString,
+										Required:     true,
+										ValidateFunc: validateAwsCodePipelineStageActionCategory,
 									},
 									"owner": {
-										Type:     schema.TypeString,
-										Required: true,
-										ValidateFunc: validation.StringInSlice([]string{
-											codepipeline.ActionOwnerAws,
-											codepipeline.ActionOwnerThirdParty,
-											codepipeline.ActionOwnerCustom,
-										}, false),
+										Type:         schema.TypeString,
+										Required:     true,
+										ValidateFunc: validateAwsCodePipelineStageActionOwner,
 									},
 									"provider": {
 										Type:     schema.TypeString,
@@ -164,6 +143,59 @@ func resourceAwsCodePipeline() *schema.Resource {
 		},
 	}
 }
+func validateAwsCodePipelineEncryptionKeyType(v interface{}, k string) (ws []string, errors []error) {
+	if v.(string) != "KMS" {
+		errors = append(errors, fmt.Errorf("CodePipeline: encryption_key type can only be KMS"))
+	}
+	return
+}
+
+func validateAwsCodePipelineArtifactStoreType(v interface{}, k string) (ws []string, errors []error) {
+	if v.(string) != "S3" {
+		errors = append(errors, fmt.Errorf("CodePipeline: artifact_store type can only be S3"))
+	}
+	return
+}
+
+func validateAwsCodePipelineStageActionCategory(v interface{}, k string) (ws []string, errors []error) {
+	value := v.(string)
+	types := map[string]bool{
+		"Source":   true,
+		"Build":    true,
+		"Deploy":   true,
+		"Test":     true,
+		"Invoke":   true,
+		"Approval": true,
+	}
+
+	if !types[value] {
+		errors = append(errors, fmt.Errorf("CodePipeline: category can only be one of Source | Build | Deploy | Test | Invoke | Approval"))
+	}
+	return
+}
+
+func validateAwsCodePipelineStageActionOwner(v interface{}, k string) (ws []string, errors []error) {
+	value := v.(string)
+	types := map[string]bool{
+		"AWS":        true,
+		"ThirdParty": true,
+		"Custom":     true,
+	}
+
+	if !types[value] {
+		errors = append(errors, fmt.Errorf("CodePipeline: owner can only be one of AWS | ThirdParty | Custom"))
+	}
+	return
+}
+
+func validateAwsCodePipelineStageActionConfiguration(v interface{}, k string) (ws []string, errors []error) {
+	for k := range v.(map[string]interface{}) {
+		if k == "OAuthToken" {
+			errors = append(errors, fmt.Errorf("CodePipeline: OAuthToken should be set as environment variable 'GITHUB_TOKEN'"))
+		}
+	}
+	return
+}
 
 func resourceAwsCodePipelineCreate(d *schema.ResourceData, meta interface{}) error {
 	conn := meta.(*AWSClient).codepipelineconn
@@ -184,10 +216,10 @@ func resourceAwsCodePipelineCreate(d *schema.ResourceData, meta interface{}) err
 		return resource.NonRetryableError(err)
 	})
 	if err != nil {
-		return fmt.Errorf("Error creating CodePipeline: %s", err)
+		return fmt.Errorf("[ERROR] Error creating CodePipeline: %s", err)
 	}
 	if resp.Pipeline == nil {
-		return fmt.Errorf("Error creating CodePipeline: invalid response from AWS")
+		return fmt.Errorf("[ERROR] Error creating CodePipeline: invalid response from AWS")
 	}
 
 	d.SetId(*resp.Pipeline.Name)
@@ -379,9 +411,6 @@ func flattenAwsCodePipelineStageActionConfiguration(config map[string]*string) m
 func expandAwsCodePipelineActionsOutputArtifacts(s []interface{}) []*codepipeline.OutputArtifact {
 	outputArtifacts := []*codepipeline.OutputArtifact{}
 	for _, artifact := range s {
-		if artifact == nil {
-			continue
-		}
 		outputArtifacts = append(outputArtifacts, &codepipeline.OutputArtifact{
 			Name: aws.String(artifact.(string)),
 		})
@@ -400,9 +429,6 @@ func flattenAwsCodePipelineActionsOutputArtifacts(artifacts []*codepipeline.Outp
 func expandAwsCodePipelineActionsInputArtifacts(s []interface{}) []*codepipeline.InputArtifact {
 	outputArtifacts := []*codepipeline.InputArtifact{}
 	for _, artifact := range s {
-		if artifact == nil {
-			continue
-		}
 		outputArtifacts = append(outputArtifacts, &codepipeline.InputArtifact{
 			Name: aws.String(artifact.(string)),
 		})
@@ -431,9 +457,8 @@ func resourceAwsCodePipelineRead(d *schema.ResourceData, meta interface{}) error
 			d.SetId("")
 			return nil
 		}
-		return fmt.Errorf("Error retreiving Pipeline: %q", err)
+		return fmt.Errorf("[ERROR] Error retreiving Pipeline: %q", err)
 	}
-	metadata := resp.Metadata
 	pipeline := resp.Pipeline
 
 	if err := d.Set("artifact_store", flattenAwsCodePipelineArtifactStore(pipeline.ArtifactStore)); err != nil {
@@ -444,7 +469,6 @@ func resourceAwsCodePipelineRead(d *schema.ResourceData, meta interface{}) error
 		return err
 	}
 
-	d.Set("arn", metadata.PipelineArn)
 	d.Set("name", pipeline.Name)
 	d.Set("role_arn", pipeline.RoleArn)
 	return nil
@@ -475,5 +499,11 @@ func resourceAwsCodePipelineDelete(d *schema.ResourceData, meta interface{}) err
 		Name: aws.String(d.Id()),
 	})
 
-	return err
+	if err != nil {
+		return err
+	}
+
+	d.SetId("")
+
+	return nil
 }

@@ -16,12 +16,12 @@ func resourceAwsVpnGatewayRoutePropagation() *schema.Resource {
 		Delete: resourceAwsVpnGatewayRoutePropagationDisable,
 
 		Schema: map[string]*schema.Schema{
-			"vpn_gateway_id": {
+			"vpn_gateway_id": &schema.Schema{
 				Type:     schema.TypeString,
 				Required: true,
 				ForceNew: true,
 			},
-			"route_table_id": {
+			"route_table_id": &schema.Schema{
 				Type:     schema.TypeString,
 				Required: true,
 				ForceNew: true,
@@ -64,6 +64,7 @@ func resourceAwsVpnGatewayRoutePropagationDisable(d *schema.ResourceData, meta i
 		return fmt.Errorf("error disabling VGW propagation: %s", err)
 	}
 
+	d.SetId("")
 	return nil
 }
 

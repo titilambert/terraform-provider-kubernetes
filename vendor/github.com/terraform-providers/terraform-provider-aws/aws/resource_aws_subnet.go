@@ -22,11 +22,6 @@ func resourceAwsSubnet() *schema.Resource {
 			State: schema.ImportStatePassthrough,
 		},
 
-		Timeouts: &schema.ResourceTimeout{
-			Create: schema.DefaultTimeout(10 * time.Minute),
-			Delete: schema.DefaultTimeout(10 * time.Minute),
-		},
-
 		SchemaVersion: 1,
 		MigrateState:  resourceAwsSubnetMigrateState,
 
@@ -50,19 +45,10 @@ func resourceAwsSubnet() *schema.Resource {
 			},
 
 			"availability_zone": {
-				Type:          schema.TypeString,
-				Optional:      true,
-				Computed:      true,
-				ForceNew:      true,
-				ConflictsWith: []string{"availability_zone_id"},
-			},
-
-			"availability_zone_id": {
-				Type:          schema.TypeString,
-				Optional:      true,
-				Computed:      true,
-				ForceNew:      true,
-				ConflictsWith: []string{"availability_zone"},
+				Type:     schema.TypeString,
+				Optional: true,
+				Computed: true,
+				ForceNew: true,
 			},
 
 			"map_public_ip_on_launch": {
@@ -82,17 +68,7 @@ func resourceAwsSubnet() *schema.Resource {
 				Computed: true,
 			},
 
-			"arn": {
-				Type:     schema.TypeString,
-				Computed: true,
-			},
-
 			"tags": tagsSchema(),
-
-			"owner_id": {
-				Type:     schema.TypeString,
-				Computed: true,
-			},
 		},
 	}
 }
@@ -101,10 +77,9 @@ func resourceAwsSubnetCreate(d *schema.ResourceData, meta interface{}) error {
 	conn := meta.(*AWSClient).ec2conn
 
 	createOpts := &ec2.CreateSubnetInput{
-		AvailabilityZone:   aws.String(d.Get("availability_zone").(string)),
-		AvailabilityZoneId: aws.String(d.Get("availability_zone_id").(string)),
-		CidrBlock:          aws.String(d.Get("cidr_block").(string)),
-		VpcId:              aws.String(d.Get("vpc_id").(string)),
+		AvailabilityZone: aws.String(d.Get("availability_zone").(string)),
+		CidrBlock:        aws.String(d.Get("cidr_block").(string)),
+		VpcId:            aws.String(d.Get("vpc_id").(string)),
 	}
 
 	if v, ok := d.GetOk("ipv6_cidr_block"); ok {
@@ -166,26 +141,20 @@ func resourceAwsSubnetRead(d *schema.ResourceData, meta interface{}) error {
 
 	d.Set("vpc_id", subnet.VpcId)
 	d.Set("availability_zone", subnet.AvailabilityZone)
-	d.Set("availability_zone_id", subnet.AvailabilityZoneId)
 	d.Set("cidr_block", subnet.CidrBlock)
 	d.Set("map_public_ip_on_launch", subnet.MapPublicIpOnLaunch)
 	d.Set("assign_ipv6_address_on_creation", subnet.AssignIpv6AddressOnCreation)
-
-	// Make sure those values are set, if an IPv6 block exists it'll be set in the loop
-	d.Set("ipv6_cidr_block_association_id", "")
-	d.Set("ipv6_cidr_block", "")
-
 	for _, a := range subnet.Ipv6CidrBlockAssociationSet {
 		if *a.Ipv6CidrBlockState.State == "associated" { //we can only ever have 1 IPv6 block associated at once
 			d.Set("ipv6_cidr_block_association_id", a.AssociationId)
 			d.Set("ipv6_cidr_block", a.Ipv6CidrBlock)
 			break
+		} else {
+			d.Set("ipv6_cidr_block_association_id", "") // we blank these out to remove old entries
+			d.Set("ipv6_cidr_block", "")
 		}
 	}
-
-	d.Set("arn", subnet.SubnetArn)
 	d.Set("tags", tagsToMap(subnet.Tags))
-	d.Set("owner_id", subnet.OwnerId)
 
 	return nil
 }
@@ -318,11 +287,6 @@ func resourceAwsSubnetDelete(d *schema.ResourceData, meta interface{}) error {
 	conn := meta.(*AWSClient).ec2conn
 
 	log.Printf("[INFO] Deleting subnet: %s", d.Id())
-
-	if err := deleteLingeringLambdaENIs(conn, d, "subnet-id"); err != nil {
-		return fmt.Errorf("Failed to delete Lambda ENIs: %s", err)
-	}
-
 	req := &ec2.DeleteSubnetInput{
 		SubnetId: aws.String(d.Id()),
 	}

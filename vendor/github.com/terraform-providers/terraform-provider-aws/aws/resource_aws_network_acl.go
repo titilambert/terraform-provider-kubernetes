@@ -36,25 +36,25 @@ func resourceAwsNetworkAcl() *schema.Resource {
 				Computed: false,
 			},
 			"subnet_id": {
-				Type:     schema.TypeString,
-				Optional: true,
-				ForceNew: true,
-				Computed: false,
-				Removed:  "Use `subnet_ids` argument instead",
+				Type:       schema.TypeString,
+				Optional:   true,
+				ForceNew:   true,
+				Computed:   false,
+				Deprecated: "Attribute subnet_id is deprecated on network_acl resources. Use subnet_ids instead",
 			},
 			"subnet_ids": {
-				Type:     schema.TypeSet,
-				Optional: true,
-				Computed: true,
-				Elem:     &schema.Schema{Type: schema.TypeString},
-				Set:      schema.HashString,
+				Type:          schema.TypeSet,
+				Optional:      true,
+				Computed:      true,
+				ConflictsWith: []string{"subnet_id"},
+				Elem:          &schema.Schema{Type: schema.TypeString},
+				Set:           schema.HashString,
 			},
 			"ingress": {
-				Type:       schema.TypeSet,
-				Required:   false,
-				Optional:   true,
-				Computed:   true,
-				ConfigMode: schema.SchemaConfigModeAttr,
+				Type:     schema.TypeSet,
+				Required: false,
+				Optional: true,
+				Computed: true,
 				Elem: &schema.Resource{
 					Schema: map[string]*schema.Schema{
 						"from_port": {
@@ -73,7 +73,10 @@ func resourceAwsNetworkAcl() *schema.Resource {
 							Type:     schema.TypeString,
 							Required: true,
 							DiffSuppressFunc: func(k, old, new string, d *schema.ResourceData) bool {
-								return strings.EqualFold(old, new)
+								if strings.ToLower(old) == strings.ToLower(new) {
+									return true
+								}
+								return false
 							},
 						},
 						"protocol": {
@@ -101,11 +104,10 @@ func resourceAwsNetworkAcl() *schema.Resource {
 				Set: resourceAwsNetworkAclEntryHash,
 			},
 			"egress": {
-				Type:       schema.TypeSet,
-				Required:   false,
-				Optional:   true,
-				Computed:   true,
-				ConfigMode: schema.SchemaConfigModeAttr,
+				Type:     schema.TypeSet,
+				Required: false,
+				Optional: true,
+				Computed: true,
 				Elem: &schema.Resource{
 					Schema: map[string]*schema.Schema{
 						"from_port": {
@@ -124,7 +126,10 @@ func resourceAwsNetworkAcl() *schema.Resource {
 							Type:     schema.TypeString,
 							Required: true,
 							DiffSuppressFunc: func(k, old, new string, d *schema.ResourceData) bool {
-								return strings.EqualFold(old, new)
+								if strings.ToLower(old) == strings.ToLower(new) {
+									return true
+								}
+								return false
 							},
 						},
 						"protocol": {
@@ -152,10 +157,6 @@ func resourceAwsNetworkAcl() *schema.Resource {
 				Set: resourceAwsNetworkAclEntryHash,
 			},
 			"tags": tagsSchema(),
-			"owner_id": {
-				Type:     schema.TypeString,
-				Computed: true,
-			},
 		},
 	}
 }
@@ -218,7 +219,7 @@ func resourceAwsNetworkAclRead(d *schema.ResourceData, meta interface{}) error {
 			continue
 		}
 
-		if *e.Egress {
+		if *e.Egress == true {
 			egressEntries = append(egressEntries, e)
 		} else {
 			ingressEntries = append(ingressEntries, e)
@@ -227,7 +228,6 @@ func resourceAwsNetworkAclRead(d *schema.ResourceData, meta interface{}) error {
 
 	d.Set("vpc_id", networkAcl.VpcId)
 	d.Set("tags", tagsToMap(networkAcl.Tags))
-	d.Set("owner_id", networkAcl.OwnerId)
 
 	var s []string
 	for _, a := range networkAcl.Associations {
@@ -266,6 +266,23 @@ func resourceAwsNetworkAclUpdate(d *schema.ResourceData, meta interface{}) error
 		}
 	}
 
+	if d.HasChange("subnet_id") {
+		//associate new subnet with the acl.
+		_, n := d.GetChange("subnet_id")
+		newSubnet := n.(string)
+		association, err := findNetworkAclAssociation(newSubnet, conn)
+		if err != nil {
+			return fmt.Errorf("Failed to update acl %s with subnet %s: %s", d.Id(), newSubnet, err)
+		}
+		_, err = conn.ReplaceNetworkAclAssociation(&ec2.ReplaceNetworkAclAssociationInput{
+			AssociationId: association.NetworkAclAssociationId,
+			NetworkAclId:  aws.String(d.Id()),
+		})
+		if err != nil {
+			return err
+		}
+	}
+
 	if d.HasChange("subnet_ids") {
 		o, n := d.GetChange("subnet_ids")
 		if o == nil {
@@ -291,10 +308,6 @@ func resourceAwsNetworkAclUpdate(d *schema.ResourceData, meta interface{}) error
 			for _, r := range remove {
 				association, err := findNetworkAclAssociation(r.(string), conn)
 				if err != nil {
-					if isResourceNotFoundError(err) {
-						// Subnet has been deleted.
-						continue
-					}
 					return fmt.Errorf("Failed to find acl association: acl %s with subnet %s: %s", d.Id(), r, err)
 				}
 				log.Printf("DEBUG] Replacing Network Acl Association (%s) with Default Network ACL ID (%s)", *association.NetworkAclAssociationId, *defaultAcl.NetworkAclId)
@@ -454,14 +467,18 @@ func resourceAwsNetworkAclDelete(d *schema.ResourceData, meta interface{}) error
 				// In case of dependency violation, we remove the association between subnet and network acl.
 				// This means the subnet is attached to default acl of vpc.
 				var associations []*ec2.NetworkAclAssociation
-				if v, ok := d.GetOk("subnet_ids"); ok {
+				if v, ok := d.GetOk("subnet_id"); ok {
+
+					a, err := findNetworkAclAssociation(v.(string), conn)
+					if err != nil {
+						return resource.NonRetryableError(err)
+					}
+					associations = append(associations, a)
+				} else if v, ok := d.GetOk("subnet_ids"); ok {
 					ids := v.(*schema.Set).List()
 					for _, i := range ids {
 						a, err := findNetworkAclAssociation(i.(string), conn)
 						if err != nil {
-							if isResourceNotFoundError(err) {
-								continue
-							}
 							return resource.NonRetryableError(err)
 						}
 						associations = append(associations, a)
@@ -513,7 +530,7 @@ func resourceAwsNetworkAclDelete(d *schema.ResourceData, meta interface{}) error
 	})
 
 	if retryErr != nil {
-		return fmt.Errorf("Error destroying Network ACL (%s): %s", d.Id(), retryErr)
+		return fmt.Errorf("[ERR] Error destroying Network ACL (%s): %s", d.Id(), retryErr)
 	}
 	return nil
 }
@@ -580,30 +597,26 @@ func getDefaultNetworkAcl(vpc_id string, conn *ec2.EC2) (defaultAcl *ec2.Network
 }
 
 func findNetworkAclAssociation(subnetId string, conn *ec2.EC2) (networkAclAssociation *ec2.NetworkAclAssociation, err error) {
-	req := &ec2.DescribeNetworkAclsInput{}
-	req.Filters = buildEC2AttributeFilterList(
-		map[string]string{
-			"association.subnet-id": subnetId,
+	resp, err := conn.DescribeNetworkAcls(&ec2.DescribeNetworkAclsInput{
+		Filters: []*ec2.Filter{
+			{
+				Name:   aws.String("association.subnet-id"),
+				Values: []*string{aws.String(subnetId)},
+			},
 		},
-	)
-	resp, err := conn.DescribeNetworkAcls(req)
+	})
+
 	if err != nil {
 		return nil, err
 	}
-
-	if len(resp.NetworkAcls) > 0 {
+	if resp.NetworkAcls != nil && len(resp.NetworkAcls) > 0 {
 		for _, association := range resp.NetworkAcls[0].Associations {
-			if aws.StringValue(association.SubnetId) == subnetId {
+			if *association.SubnetId == subnetId {
 				return association, nil
 			}
 		}
 	}
-
-	return nil, &resource.NotFoundError{
-		LastRequest:  req,
-		LastResponse: resp,
-		Message:      fmt.Sprintf("could not find association for subnet: %s ", subnetId),
-	}
+	return nil, fmt.Errorf("could not find association for subnet: %s ", subnetId)
 }
 
 // networkAclEntriesToMapList turns ingress/egress rules read from AWS into a list

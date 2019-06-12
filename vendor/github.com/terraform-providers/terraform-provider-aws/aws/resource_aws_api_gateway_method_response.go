@@ -1,19 +1,18 @@
 package aws
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"strconv"
-	"strings"
-	"sync"
+	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/service/apigateway"
+	"github.com/hashicorp/terraform/helper/resource"
 	"github.com/hashicorp/terraform/helper/schema"
 )
-
-var resourceAwsApiGatewayMethodResponseMutex = &sync.Mutex{}
 
 func resourceAwsApiGatewayMethodResponse() *schema.Resource {
 	return &schema.Resource{
@@ -21,66 +20,50 @@ func resourceAwsApiGatewayMethodResponse() *schema.Resource {
 		Read:   resourceAwsApiGatewayMethodResponseRead,
 		Update: resourceAwsApiGatewayMethodResponseUpdate,
 		Delete: resourceAwsApiGatewayMethodResponseDelete,
-		Importer: &schema.ResourceImporter{
-			State: func(d *schema.ResourceData, meta interface{}) ([]*schema.ResourceData, error) {
-				idParts := strings.Split(d.Id(), "/")
-				if len(idParts) != 4 || idParts[0] == "" || idParts[1] == "" || idParts[2] == "" || idParts[3] == "" {
-					return nil, fmt.Errorf("Unexpected format of ID (%q), expected REST-API-ID/RESOURCE-ID/HTTP-METHOD/STATUS-CODE", d.Id())
-				}
-				restApiID := idParts[0]
-				resourceID := idParts[1]
-				httpMethod := idParts[2]
-				statusCode := idParts[3]
-				d.Set("http_method", httpMethod)
-				d.Set("status_code", statusCode)
-				d.Set("resource_id", resourceID)
-				d.Set("rest_api_id", restApiID)
-				d.SetId(fmt.Sprintf("agmr-%s-%s-%s-%s", restApiID, resourceID, httpMethod, statusCode))
-				return []*schema.ResourceData{d}, nil
-			},
-		},
 
 		Schema: map[string]*schema.Schema{
-			"rest_api_id": {
+			"rest_api_id": &schema.Schema{
 				Type:     schema.TypeString,
 				Required: true,
 				ForceNew: true,
 			},
 
-			"resource_id": {
+			"resource_id": &schema.Schema{
 				Type:     schema.TypeString,
 				Required: true,
 				ForceNew: true,
 			},
 
-			"http_method": {
+			"http_method": &schema.Schema{
 				Type:         schema.TypeString,
 				Required:     true,
 				ForceNew:     true,
-				ValidateFunc: validateHTTPMethod(),
+				ValidateFunc: validateHTTPMethod,
 			},
 
-			"status_code": {
+			"status_code": &schema.Schema{
 				Type:     schema.TypeString,
 				Required: true,
 			},
 
-			"response_models": {
+			"response_models": &schema.Schema{
 				Type:     schema.TypeMap,
 				Optional: true,
-				Elem:     &schema.Schema{Type: schema.TypeString},
+				Elem:     schema.TypeString,
 			},
 
-			"response_parameters": {
-				Type:     schema.TypeMap,
-				Elem:     &schema.Schema{Type: schema.TypeBool},
-				Optional: true,
+			"response_parameters": &schema.Schema{
+				Type:          schema.TypeMap,
+				Elem:          schema.TypeBool,
+				Optional:      true,
+				ConflictsWith: []string{"response_parameters_in_json"},
 			},
 
-			"response_parameters_in_json": {
-				Type:     schema.TypeString,
-				Optional: true,
-				Removed:  "Use `response_parameters` argument instead",
+			"response_parameters_in_json": &schema.Schema{
+				Type:          schema.TypeString,
+				Optional:      true,
+				ConflictsWith: []string{"response_parameters"},
+				Deprecated:    "Use field response_parameters instead",
 			},
 		},
 	}
@@ -104,21 +87,20 @@ func resourceAwsApiGatewayMethodResponseCreate(d *schema.ResourceData, meta inte
 			}
 		}
 	}
+	if v, ok := d.GetOk("response_parameters_in_json"); ok {
+		if err := json.Unmarshal([]byte(v.(string)), &parameters); err != nil {
+			return fmt.Errorf("Error unmarshaling request_parameters_in_json: %s", err)
+		}
+	}
 
-	resourceAwsApiGatewayMethodResponseMutex.Lock()
-	defer resourceAwsApiGatewayMethodResponseMutex.Unlock()
-
-	_, err := retryOnAwsCode(apigateway.ErrCodeConflictException, func() (interface{}, error) {
-		return conn.PutMethodResponse(&apigateway.PutMethodResponseInput{
-			HttpMethod:         aws.String(d.Get("http_method").(string)),
-			ResourceId:         aws.String(d.Get("resource_id").(string)),
-			RestApiId:          aws.String(d.Get("rest_api_id").(string)),
-			StatusCode:         aws.String(d.Get("status_code").(string)),
-			ResponseModels:     aws.StringMap(models),
-			ResponseParameters: aws.BoolMap(parameters),
-		})
+	_, err := conn.PutMethodResponse(&apigateway.PutMethodResponseInput{
+		HttpMethod:         aws.String(d.Get("http_method").(string)),
+		ResourceId:         aws.String(d.Get("resource_id").(string)),
+		RestApiId:          aws.String(d.Get("rest_api_id").(string)),
+		StatusCode:         aws.String(d.Get("status_code").(string)),
+		ResponseModels:     aws.StringMap(models),
+		ResponseParameters: aws.BoolMap(parameters),
 	})
-
 	if err != nil {
 		return fmt.Errorf("Error creating API Gateway Method Response: %s", err)
 	}
@@ -132,7 +114,7 @@ func resourceAwsApiGatewayMethodResponseCreate(d *schema.ResourceData, meta inte
 func resourceAwsApiGatewayMethodResponseRead(d *schema.ResourceData, meta interface{}) error {
 	conn := meta.(*AWSClient).apigateway
 
-	log.Printf("[DEBUG] Reading API Gateway Method Response %s", d.Id())
+	log.Printf("[DEBUG] Reading API Gateway Method %s", d.Id())
 	methodResponse, err := conn.GetMethodResponse(&apigateway.GetMethodResponseInput{
 		HttpMethod: aws.String(d.Get("http_method").(string)),
 		ResourceId: aws.String(d.Get("resource_id").(string)),
@@ -141,22 +123,17 @@ func resourceAwsApiGatewayMethodResponseRead(d *schema.ResourceData, meta interf
 	})
 	if err != nil {
 		if awsErr, ok := err.(awserr.Error); ok && awsErr.Code() == "NotFoundException" {
-			log.Printf("[WARN] API Gateway Response (%s) not found, removing from state", d.Id())
 			d.SetId("")
 			return nil
 		}
 		return err
 	}
 
-	log.Printf("[DEBUG] Received API Gateway Method Response: %s", methodResponse)
-
-	if err := d.Set("response_models", aws.StringValueMap(methodResponse.ResponseModels)); err != nil {
-		return fmt.Errorf("error setting response_models: %s", err)
-	}
-
-	if err := d.Set("response_parameters", aws.BoolValueMap(methodResponse.ResponseParameters)); err != nil {
-		return fmt.Errorf("error setting response_parameters: %s", err)
-	}
+	log.Printf("[DEBUG] Received API Gateway Method: %s", methodResponse)
+	d.Set("response_models", aws.StringValueMap(methodResponse.ResponseModels))
+	d.Set("response_parameters", aws.BoolValueMap(methodResponse.ResponseParameters))
+	d.Set("response_parameters_in_json", aws.BoolValueMap(methodResponse.ResponseParameters))
+	d.SetId(fmt.Sprintf("agmr-%s-%s-%s-%s", d.Get("rest_api_id").(string), d.Get("resource_id").(string), d.Get("http_method").(string), d.Get("status_code").(string)))
 
 	return nil
 }
@@ -169,6 +146,14 @@ func resourceAwsApiGatewayMethodResponseUpdate(d *schema.ResourceData, meta inte
 
 	if d.HasChange("response_models") {
 		operations = append(operations, expandApiGatewayRequestResponseModelOperations(d, "response_models", "responseModels")...)
+	}
+
+	if d.HasChange("response_parameters_in_json") {
+		ops, err := deprecatedExpandApiGatewayMethodParametersJSONOperations(d, "response_parameters_in_json", "responseParameters")
+		if err != nil {
+			return err
+		}
+		operations = append(operations, ops...)
 	}
 
 	if d.HasChange("response_parameters") {
@@ -200,20 +185,26 @@ func resourceAwsApiGatewayMethodResponseDelete(d *schema.ResourceData, meta inte
 	conn := meta.(*AWSClient).apigateway
 	log.Printf("[DEBUG] Deleting API Gateway Method Response: %s", d.Id())
 
-	_, err := conn.DeleteMethodResponse(&apigateway.DeleteMethodResponseInput{
-		HttpMethod: aws.String(d.Get("http_method").(string)),
-		ResourceId: aws.String(d.Get("resource_id").(string)),
-		RestApiId:  aws.String(d.Get("rest_api_id").(string)),
-		StatusCode: aws.String(d.Get("status_code").(string)),
+	return resource.Retry(5*time.Minute, func() *resource.RetryError {
+		_, err := conn.DeleteMethodResponse(&apigateway.DeleteMethodResponseInput{
+			HttpMethod: aws.String(d.Get("http_method").(string)),
+			ResourceId: aws.String(d.Get("resource_id").(string)),
+			RestApiId:  aws.String(d.Get("rest_api_id").(string)),
+			StatusCode: aws.String(d.Get("status_code").(string)),
+		})
+		if err == nil {
+			return nil
+		}
+
+		apigatewayErr, ok := err.(awserr.Error)
+		if apigatewayErr.Code() == "NotFoundException" {
+			return nil
+		}
+
+		if !ok {
+			return resource.NonRetryableError(err)
+		}
+
+		return resource.NonRetryableError(err)
 	})
-
-	if isAWSErr(err, apigateway.ErrCodeNotFoundException, "") {
-		return nil
-	}
-
-	if err != nil {
-		return fmt.Errorf("error deleting API Gateway Method Response (%s): %s", d.Id(), err)
-	}
-
-	return nil
 }

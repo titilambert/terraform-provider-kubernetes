@@ -11,7 +11,7 @@ import (
 // diffTags takes our tags locally and the ones remotely and returns
 // the set of tags that must be created, and the set of tags that must
 // be destroyed.
-func diffTagsBeanstalk(oldTags, newTags []*elasticbeanstalk.Tag) ([]*elasticbeanstalk.Tag, []*string) {
+func diffTagsBeanstalk(oldTags, newTags []*elasticbeanstalk.Tag) ([]*elasticbeanstalk.Tag, []*elasticbeanstalk.Tag) {
 	// First, we're creating everything we have
 	create := make(map[string]interface{})
 	for _, t := range newTags {
@@ -19,11 +19,12 @@ func diffTagsBeanstalk(oldTags, newTags []*elasticbeanstalk.Tag) ([]*elasticbean
 	}
 
 	// Build the list of what to remove
-	var remove []*string
+	var remove []*elasticbeanstalk.Tag
 	for _, t := range oldTags {
-		if _, ok := create[*t.Key]; !ok {
+		old, ok := create[*t.Key]
+		if !ok || old != *t.Value {
 			// Delete it!
-			remove = append(remove, t.Key)
+			remove = append(remove, t)
 		}
 	}
 
@@ -61,11 +62,10 @@ func tagsToMapBeanstalk(ts []*elasticbeanstalk.Tag) map[string]string {
 // compare a tag against a list of strings and checks if it should
 // be ignored or not
 func tagIgnoredBeanstalk(t *elasticbeanstalk.Tag) bool {
-	filter := []string{"^aws:", "^elasticbeanstalk:", "Name"}
+	filter := []string{"^aws:"}
 	for _, v := range filter {
 		log.Printf("[DEBUG] Matching %v with %v\n", v, *t.Key)
-		r, _ := regexp.MatchString(v, *t.Key)
-		if r {
+		if r, _ := regexp.MatchString(v, *t.Key); r == true {
 			log.Printf("[DEBUG] Found AWS specific tag %s (val: %s), ignoring.\n", *t.Key, *t.Value)
 			return true
 		}

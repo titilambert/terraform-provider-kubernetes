@@ -2,11 +2,11 @@ package aws
 
 import (
 	"fmt"
-	"log"
 	"net/url"
 	"strings"
 
 	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/service/iam"
 
 	"github.com/hashicorp/terraform/helper/resource"
@@ -23,24 +23,23 @@ func resourceAwsIamGroupPolicy() *schema.Resource {
 		Delete: resourceAwsIamGroupPolicyDelete,
 
 		Schema: map[string]*schema.Schema{
-			"policy": {
+			"policy": &schema.Schema{
 				Type:     schema.TypeString,
 				Required: true,
 			},
-			"name": {
+			"name": &schema.Schema{
 				Type:          schema.TypeString,
 				Optional:      true,
 				Computed:      true,
 				ForceNew:      true,
 				ConflictsWith: []string{"name_prefix"},
 			},
-			"name_prefix": {
-				Type:          schema.TypeString,
-				Optional:      true,
-				ForceNew:      true,
-				ConflictsWith: []string{"name"},
+			"name_prefix": &schema.Schema{
+				Type:     schema.TypeString,
+				Optional: true,
+				ForceNew: true,
 			},
-			"group": {
+			"group": &schema.Schema{
 				Type:     schema.TypeString,
 				Required: true,
 				ForceNew: true,
@@ -88,8 +87,7 @@ func resourceAwsIamGroupPolicyRead(d *schema.ResourceData, meta interface{}) err
 	var err error
 	getResp, err := iamconn.GetGroupPolicy(request)
 	if err != nil {
-		if isAWSErr(err, iam.ErrCodeNoSuchEntityException, "") {
-			log.Printf("[WARN] IAM Group Policy (%s) for %s not found, removing from state", name, group)
+		if iamerr, ok := err.(awserr.Error); ok && iamerr.Code() == "NoSuchEntity" { // XXX test me
 			d.SetId("")
 			return nil
 		}
@@ -104,12 +102,7 @@ func resourceAwsIamGroupPolicyRead(d *schema.ResourceData, meta interface{}) err
 	if err != nil {
 		return err
 	}
-
-	d.Set("group", group)
-	d.Set("name", name)
-	d.Set("policy", policy)
-
-	return nil
+	return d.Set("policy", policy)
 }
 
 func resourceAwsIamGroupPolicyDelete(d *schema.ResourceData, meta interface{}) error {
@@ -123,9 +116,6 @@ func resourceAwsIamGroupPolicyDelete(d *schema.ResourceData, meta interface{}) e
 	}
 
 	if _, err := iamconn.DeleteGroupPolicy(request); err != nil {
-		if isAWSErr(err, iam.ErrCodeNoSuchEntityException, "") {
-			return nil
-		}
 		return fmt.Errorf("Error deleting IAM group policy %s: %s", d.Id(), err)
 	}
 	return nil

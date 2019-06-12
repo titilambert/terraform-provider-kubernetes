@@ -19,19 +19,19 @@ func resourceAwsLoadBalancerListenerPolicies() *schema.Resource {
 		Delete: resourceAwsLoadBalancerListenerPoliciesDelete,
 
 		Schema: map[string]*schema.Schema{
-			"load_balancer_name": {
+			"load_balancer_name": &schema.Schema{
 				Type:     schema.TypeString,
 				Required: true,
 			},
 
-			"policy_names": {
+			"policy_names": &schema.Schema{
 				Type:     schema.TypeSet,
 				Elem:     &schema.Schema{Type: schema.TypeString},
 				Optional: true,
 				Set:      schema.HashString,
 			},
 
-			"load_balancer_port": {
+			"load_balancer_port": &schema.Schema{
 				Type:     schema.TypeInt,
 				Required: true,
 			},
@@ -96,7 +96,9 @@ func resourceAwsLoadBalancerListenerPoliciesRead(d *schema.ResourceData, meta in
 			continue
 		}
 
-		policyNames = append(policyNames, listener.PolicyNames...)
+		for _, name := range listener.PolicyNames {
+			policyNames = append(policyNames, name)
+		}
 	}
 
 	d.Set("load_balancer_name", loadBalancerName)
@@ -126,6 +128,7 @@ func resourceAwsLoadBalancerListenerPoliciesDelete(d *schema.ResourceData, meta 
 		return fmt.Errorf("Error setting LoadBalancerPoliciesOfListener: %s", err)
 	}
 
+	d.SetId("")
 	return nil
 }
 

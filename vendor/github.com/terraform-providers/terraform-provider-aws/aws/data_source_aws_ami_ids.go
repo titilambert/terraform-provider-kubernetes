@@ -4,14 +4,10 @@ import (
 	"fmt"
 	"log"
 	"regexp"
-	"sort"
-	"time"
 
-	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/hashicorp/terraform/helper/hashcode"
 	"github.com/hashicorp/terraform/helper/schema"
-	"github.com/hashicorp/terraform/helper/validation"
 )
 
 func dataSourceAwsAmiIds() *schema.Resource {
@@ -30,26 +26,19 @@ func dataSourceAwsAmiIds() *schema.Resource {
 				Type:         schema.TypeString,
 				Optional:     true,
 				ForceNew:     true,
-				ValidateFunc: validation.ValidateRegexp,
+				ValidateFunc: validateNameRegex,
 			},
 			"owners": {
 				Type:     schema.TypeList,
-				Required: true,
-				MinItems: 1,
-				Elem: &schema.Schema{
-					Type:         schema.TypeString,
-					ValidateFunc: validation.NoZeroValues,
-				},
+				Optional: true,
+				ForceNew: true,
+				Elem:     &schema.Schema{Type: schema.TypeString},
 			},
-			"ids": {
+			"tags": dataSourceTagsSchema(),
+			"ids": &schema.Schema{
 				Type:     schema.TypeList,
 				Computed: true,
 				Elem:     &schema.Schema{Type: schema.TypeString},
-			},
-			"sort_ascending": {
-				Type:     schema.TypeBool,
-				Default:  false,
-				Optional: true,
 			},
 		},
 	}
@@ -58,18 +47,31 @@ func dataSourceAwsAmiIds() *schema.Resource {
 func dataSourceAwsAmiIdsRead(d *schema.ResourceData, meta interface{}) error {
 	conn := meta.(*AWSClient).ec2conn
 
-	params := &ec2.DescribeImagesInput{
-		Owners: expandStringList(d.Get("owners").([]interface{})),
+	executableUsers, executableUsersOk := d.GetOk("executable_users")
+	filters, filtersOk := d.GetOk("filter")
+	nameRegex, nameRegexOk := d.GetOk("name_regex")
+	owners, ownersOk := d.GetOk("owners")
+
+	if executableUsersOk == false && filtersOk == false && nameRegexOk == false && ownersOk == false {
+		return fmt.Errorf("One of executable_users, filters, name_regex, or owners must be assigned")
 	}
 
-	if v, ok := d.GetOk("executable_users"); ok {
-		params.ExecutableUsers = expandStringList(v.([]interface{}))
+	params := &ec2.DescribeImagesInput{}
+
+	if executableUsersOk {
+		params.ExecutableUsers = expandStringList(executableUsers.([]interface{}))
 	}
-	if v, ok := d.GetOk("filter"); ok {
-		params.Filters = buildAwsDataSourceFilters(v.(*schema.Set))
+	if filtersOk {
+		params.Filters = buildAwsDataSourceFilters(filters.(*schema.Set))
+	}
+	if ownersOk {
+		o := expandStringList(owners.([]interface{}))
+
+		if len(o) > 0 {
+			params.Owners = o
+		}
 	}
 
-	log.Printf("[DEBUG] Reading AMI IDs: %s", params)
 	resp, err := conn.DescribeImages(params)
 	if err != nil {
 		return err
@@ -78,7 +80,7 @@ func dataSourceAwsAmiIdsRead(d *schema.ResourceData, meta interface{}) error {
 	var filteredImages []*ec2.Image
 	imageIds := make([]string, 0)
 
-	if nameRegex, ok := d.GetOk("name_regex"); ok {
+	if nameRegexOk {
 		r := regexp.MustCompile(nameRegex.(string))
 		for _, image := range resp.Images {
 			// Check for a very rare case where the response would include no
@@ -98,15 +100,7 @@ func dataSourceAwsAmiIdsRead(d *schema.ResourceData, meta interface{}) error {
 		filteredImages = resp.Images[:]
 	}
 
-	sort.Slice(filteredImages, func(i, j int) bool {
-		itime, _ := time.Parse(time.RFC3339, aws.StringValue(filteredImages[i].CreationDate))
-		jtime, _ := time.Parse(time.RFC3339, aws.StringValue(filteredImages[j].CreationDate))
-		if d.Get("sort_ascending").(bool) {
-			return itime.Unix() < jtime.Unix()
-		}
-		return itime.Unix() > jtime.Unix()
-	})
-	for _, image := range filteredImages {
+	for _, image := range sortImages(filteredImages) {
 		imageIds = append(imageIds, *image.ImageId)
 	}
 

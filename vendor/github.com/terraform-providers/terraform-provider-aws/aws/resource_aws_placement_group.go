@@ -22,12 +22,12 @@ func resourceAwsPlacementGroup() *schema.Resource {
 		},
 
 		Schema: map[string]*schema.Schema{
-			"name": {
+			"name": &schema.Schema{
 				Type:     schema.TypeString,
 				Required: true,
 				ForceNew: true,
 			},
-			"strategy": {
+			"strategy": &schema.Schema{
 				Type:     schema.TypeString,
 				Required: true,
 				ForceNew: true,
@@ -144,5 +144,10 @@ func resourceAwsPlacementGroupDelete(d *schema.ResourceData, meta interface{}) e
 	}
 
 	_, err = wait.WaitForState()
-	return err
+	if err != nil {
+		return err
+	}
+
+	d.SetId("")
+	return nil
 }

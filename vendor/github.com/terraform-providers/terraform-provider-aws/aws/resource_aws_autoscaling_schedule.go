@@ -129,13 +129,13 @@ func resourceAwsAutoscalingScheduleCreate(d *schema.ResourceData, meta interface
 }
 
 func resourceAwsAutoscalingScheduleRead(d *schema.ResourceData, meta interface{}) error {
-	sa, exists, err := resourceAwsASGScheduledActionRetrieve(d, meta)
+	sa, err, exists := resourceAwsASGScheduledActionRetrieve(d, meta)
 	if err != nil {
 		return err
 	}
 
 	if !exists {
-		log.Printf("[WARN] Autoscaling Scheduled Action (%s) not found, removing from state", d.Id())
+		log.Printf("Error retrieving Autoscaling Scheduled Actions. Removing from state")
 		d.SetId("")
 		return nil
 	}
@@ -189,7 +189,7 @@ func resourceAwsAutoscalingScheduleDelete(d *schema.ResourceData, meta interface
 	return nil
 }
 
-func resourceAwsASGScheduledActionRetrieve(d *schema.ResourceData, meta interface{}) (*autoscaling.ScheduledUpdateGroupAction, bool, error) {
+func resourceAwsASGScheduledActionRetrieve(d *schema.ResourceData, meta interface{}) (*autoscaling.ScheduledUpdateGroupAction, error, bool) {
 	autoscalingconn := meta.(*AWSClient).autoscalingconn
 
 	params := &autoscaling.DescribeScheduledActionsInput{
@@ -202,18 +202,18 @@ func resourceAwsASGScheduledActionRetrieve(d *schema.ResourceData, meta interfac
 	if err != nil {
 		//A ValidationError here can mean that either the Schedule is missing OR the Autoscaling Group is missing
 		if ec2err, ok := err.(awserr.Error); ok && ec2err.Code() == "ValidationError" {
-			log.Printf("[WARN] Autoscaling Scheduled Action (%s) not found, removing from state", d.Id())
+			log.Printf("[WARNING] %s not found, removing from state", d.Id())
 			d.SetId("")
 
-			return nil, false, nil
+			return nil, nil, false
 		}
-		return nil, false, fmt.Errorf("Error retrieving Autoscaling Scheduled Actions: %s", err)
+		return nil, fmt.Errorf("Error retrieving Autoscaling Scheduled Actions: %s", err), false
 	}
 
 	if len(actions.ScheduledUpdateGroupActions) != 1 ||
 		*actions.ScheduledUpdateGroupActions[0].ScheduledActionName != d.Id() {
-		return nil, false, nil
+		return nil, nil, false
 	}
 
-	return actions.ScheduledUpdateGroupActions[0], true, nil
+	return actions.ScheduledUpdateGroupActions[0], nil, true
 }

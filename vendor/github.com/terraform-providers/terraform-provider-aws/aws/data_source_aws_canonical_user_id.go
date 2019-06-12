@@ -14,6 +14,10 @@ func dataSourceAwsCanonicalUserId() *schema.Resource {
 		Read: dataSourceAwsCanonicalUserIdRead,
 
 		Schema: map[string]*schema.Schema{
+			"id": {
+				Type:     schema.TypeString,
+				Computed: true,
+			},
 			"display_name": {
 				Type:     schema.TypeString,
 				Computed: true,
@@ -25,7 +29,7 @@ func dataSourceAwsCanonicalUserId() *schema.Resource {
 func dataSourceAwsCanonicalUserIdRead(d *schema.ResourceData, meta interface{}) error {
 	conn := meta.(*AWSClient).s3conn
 
-	log.Printf("[DEBUG] Reading S3 Buckets")
+	log.Printf("[DEBUG] Listing S3 buckets.")
 
 	req := &s3.ListBucketsInput{}
 	resp, err := conn.ListBuckets(req)
@@ -37,6 +41,7 @@ func dataSourceAwsCanonicalUserIdRead(d *schema.ResourceData, meta interface{}) 
 	}
 
 	d.SetId(aws.StringValue(resp.Owner.ID))
+	d.Set("id", resp.Owner.ID)
 	d.Set("display_name", resp.Owner.DisplayName)
 
 	return nil

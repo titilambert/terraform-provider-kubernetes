@@ -8,7 +8,6 @@ import (
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/service/waf"
 	"github.com/hashicorp/terraform/helper/schema"
-	"github.com/hashicorp/terraform/helper/validation"
 )
 
 func resourceAwsWafRule() *schema.Resource {
@@ -17,40 +16,51 @@ func resourceAwsWafRule() *schema.Resource {
 		Read:   resourceAwsWafRuleRead,
 		Update: resourceAwsWafRuleUpdate,
 		Delete: resourceAwsWafRuleDelete,
-		Importer: &schema.ResourceImporter{
-			State: schema.ImportStatePassthrough,
-		},
 
 		Schema: map[string]*schema.Schema{
-			"name": {
+			"name": &schema.Schema{
 				Type:     schema.TypeString,
 				Required: true,
 				ForceNew: true,
 			},
-			"metric_name": {
+			"metric_name": &schema.Schema{
 				Type:         schema.TypeString,
 				Required:     true,
 				ForceNew:     true,
 				ValidateFunc: validateWafMetricName,
 			},
-			"predicates": {
+			"predicates": &schema.Schema{
 				Type:     schema.TypeSet,
 				Optional: true,
 				Elem: &schema.Resource{
 					Schema: map[string]*schema.Schema{
-						"negated": {
+						"negated": &schema.Schema{
 							Type:     schema.TypeBool,
 							Required: true,
 						},
-						"data_id": {
-							Type:         schema.TypeString,
-							Required:     true,
-							ValidateFunc: validation.StringLenBetween(0, 128),
+						"data_id": &schema.Schema{
+							Type:     schema.TypeString,
+							Optional: true,
+							ValidateFunc: func(v interface{}, k string) (ws []string, errors []error) {
+								value := v.(string)
+								if len(value) > 128 {
+									errors = append(errors, fmt.Errorf(
+										"%q cannot be longer than 128 characters", k))
+								}
+								return
+							},
 						},
-						"type": {
-							Type:         schema.TypeString,
-							Required:     true,
-							ValidateFunc: validateWafPredicatesType(),
+						"type": &schema.Schema{
+							Type:     schema.TypeString,
+							Required: true,
+							ValidateFunc: func(v interface{}, k string) (ws []string, errors []error) {
+								value := v.(string)
+								if value != "IPMatch" && value != "ByteMatch" && value != "SqlInjectionMatch" && value != "SizeConstraint" && value != "XssMatch" {
+									errors = append(errors, fmt.Errorf(
+										"%q must be one of IPMatch | ByteMatch | SqlInjectionMatch | SizeConstraint | XssMatch", k))
+								}
+								return
+							},
 						},
 					},
 				},
@@ -62,7 +72,7 @@ func resourceAwsWafRule() *schema.Resource {
 func resourceAwsWafRuleCreate(d *schema.ResourceData, meta interface{}) error {
 	conn := meta.(*AWSClient).wafconn
 
-	wr := newWafRetryer(conn)
+	wr := newWafRetryer(conn, "global")
 	out, err := wr.RetryWithToken(func(token *string) (interface{}, error) {
 		params := &waf.CreateRuleInput{
 			ChangeToken: token,
@@ -90,7 +100,7 @@ func resourceAwsWafRuleRead(d *schema.ResourceData, meta interface{}) error {
 	resp, err := conn.GetRule(params)
 	if err != nil {
 		if awsErr, ok := err.(awserr.Error); ok && awsErr.Code() == "WAFNonexistentItemException" {
-			log.Printf("[WARN] WAF Rule (%s) not found, removing from state", d.Id())
+			log.Printf("[WARN] WAF Rule (%s) not found, error code (404)", d.Id())
 			d.SetId("")
 			return nil
 		}
@@ -144,7 +154,7 @@ func resourceAwsWafRuleDelete(d *schema.ResourceData, meta interface{}) error {
 		}
 	}
 
-	wr := newWafRetryer(conn)
+	wr := newWafRetryer(conn, "global")
 	_, err := wr.RetryWithToken(func(token *string) (interface{}, error) {
 		req := &waf.DeleteRuleInput{
 			ChangeToken: token,
@@ -161,7 +171,7 @@ func resourceAwsWafRuleDelete(d *schema.ResourceData, meta interface{}) error {
 }
 
 func updateWafRuleResource(id string, oldP, newP []interface{}, conn *waf.WAF) error {
-	wr := newWafRetryer(conn)
+	wr := newWafRetryer(conn, "global")
 	_, err := wr.RetryWithToken(func(token *string) (interface{}, error) {
 		req := &waf.UpdateRuleInput{
 			ChangeToken: token,
@@ -176,4 +186,40 @@ func updateWafRuleResource(id string, oldP, newP []interface{}, conn *waf.WAF) e
 	}
 
 	return nil
+}
+
+func diffWafRulePredicates(oldP, newP []interface{}) []*waf.RuleUpdate {
+	updates := make([]*waf.RuleUpdate, 0)
+
+	for _, op := range oldP {
+		predicate := op.(map[string]interface{})
+
+		if idx, contains := sliceContainsMap(newP, predicate); contains {
+			newP = append(newP[:idx], newP[idx+1:]...)
+			continue
+		}
+
+		updates = append(updates, &waf.RuleUpdate{
+			Action: aws.String(waf.ChangeActionDelete),
+			Predicate: &waf.Predicate{
+				Negated: aws.Bool(predicate["negated"].(bool)),
+				Type:    aws.String(predicate["type"].(string)),
+				DataId:  aws.String(predicate["data_id"].(string)),
+			},
+		})
+	}
+
+	for _, np := range newP {
+		predicate := np.(map[string]interface{})
+
+		updates = append(updates, &waf.RuleUpdate{
+			Action: aws.String(waf.ChangeActionInsert),
+			Predicate: &waf.Predicate{
+				Negated: aws.Bool(predicate["negated"].(bool)),
+				Type:    aws.String(predicate["type"].(string)),
+				DataId:  aws.String(predicate["data_id"].(string)),
+			},
+		})
+	}
+	return updates
 }

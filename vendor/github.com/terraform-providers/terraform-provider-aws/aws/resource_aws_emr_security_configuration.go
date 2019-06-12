@@ -1,13 +1,13 @@
 package aws
 
 import (
+	"fmt"
 	"log"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/emr"
 	"github.com/hashicorp/terraform/helper/resource"
 	"github.com/hashicorp/terraform/helper/schema"
-	"github.com/hashicorp/terraform/helper/validation"
 )
 
 func resourceAwsEMRSecurityConfiguration() *schema.Resource {
@@ -20,27 +20,40 @@ func resourceAwsEMRSecurityConfiguration() *schema.Resource {
 		},
 
 		Schema: map[string]*schema.Schema{
-			"name": {
+			"name": &schema.Schema{
 				Type:          schema.TypeString,
 				Optional:      true,
 				Computed:      true,
 				ForceNew:      true,
 				ConflictsWith: []string{"name_prefix"},
-				ValidateFunc:  validation.StringLenBetween(0, 10280),
+				ValidateFunc: func(v interface{}, k string) (ws []string, errors []error) {
+					value := v.(string)
+					if len(value) > 10280 {
+						errors = append(errors, fmt.Errorf(
+							"%q cannot be longer than 10280 characters", k))
+					}
+					return
+				},
 			},
-			"name_prefix": {
-				Type:          schema.TypeString,
-				Optional:      true,
-				ForceNew:      true,
-				ConflictsWith: []string{"name"},
-				ValidateFunc:  validation.StringLenBetween(0, 10280-resource.UniqueIDSuffixLength),
+			"name_prefix": &schema.Schema{
+				Type:     schema.TypeString,
+				Optional: true,
+				ForceNew: true,
+				ValidateFunc: func(v interface{}, k string) (ws []string, errors []error) {
+					value := v.(string)
+					if len(value) > 10000 {
+						errors = append(errors, fmt.Errorf(
+							"%q cannot be longer than 10000 characters, name is limited to 10280", k))
+					}
+					return
+				},
 			},
 
 			"configuration": {
 				Type:         schema.TypeString,
 				Required:     true,
 				ForceNew:     true,
-				ValidateFunc: validation.ValidateJsonString,
+				ValidateFunc: validateJsonString,
 			},
 
 			"creation_date": {
@@ -66,7 +79,7 @@ func resourceAwsEmrSecurityConfigurationCreate(d *schema.ResourceData, meta inte
 	}
 
 	resp, err := conn.CreateSecurityConfiguration(&emr.CreateSecurityConfigurationInput{
-		Name:                  aws.String(emrSCName),
+		Name: aws.String(emrSCName),
 		SecurityConfiguration: aws.String(d.Get("configuration").(string)),
 	})
 
@@ -86,7 +99,7 @@ func resourceAwsEmrSecurityConfigurationRead(d *schema.ResourceData, meta interf
 	})
 	if err != nil {
 		if isAWSErr(err, "InvalidRequestException", "does not exist") {
-			log.Printf("[WARN] EMR Security Configuration (%s) not found, removing from state", d.Id())
+			log.Printf("[WARN] EMR Security Configuraiton (%s) not found, removing from state", d.Id())
 			d.SetId("")
 			return nil
 		}
@@ -108,10 +121,12 @@ func resourceAwsEmrSecurityConfigurationDelete(d *schema.ResourceData, meta inte
 	})
 	if err != nil {
 		if isAWSErr(err, "InvalidRequestException", "does not exist") {
+			d.SetId("")
 			return nil
 		}
 		return err
 	}
+	d.SetId("")
 
 	return nil
 }

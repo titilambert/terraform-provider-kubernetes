@@ -3,7 +3,6 @@ package aws
 import (
 	"fmt"
 	"log"
-	"strings"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
@@ -17,17 +16,14 @@ func resourceAwsIamGroupPolicyAttachment() *schema.Resource {
 		Create: resourceAwsIamGroupPolicyAttachmentCreate,
 		Read:   resourceAwsIamGroupPolicyAttachmentRead,
 		Delete: resourceAwsIamGroupPolicyAttachmentDelete,
-		Importer: &schema.ResourceImporter{
-			State: resourceAwsIamGroupPolicyAttachmentImport,
-		},
 
 		Schema: map[string]*schema.Schema{
-			"group": {
+			"group": &schema.Schema{
 				Type:     schema.TypeString,
 				Required: true,
 				ForceNew: true,
 			},
-			"policy_arn": {
+			"policy_arn": &schema.Schema{
 				Type:     schema.TypeString,
 				Required: true,
 				ForceNew: true,
@@ -44,7 +40,7 @@ func resourceAwsIamGroupPolicyAttachmentCreate(d *schema.ResourceData, meta inte
 
 	err := attachPolicyToGroup(conn, group, arn)
 	if err != nil {
-		return fmt.Errorf("Error attaching policy %s to IAM group %s: %v", arn, group, err)
+		return fmt.Errorf("[WARN] Error attaching policy %s to IAM group %s: %v", arn, group, err)
 	}
 
 	d.SetId(resource.PrefixedUniqueId(fmt.Sprintf("%s-", group)))
@@ -100,22 +96,9 @@ func resourceAwsIamGroupPolicyAttachmentDelete(d *schema.ResourceData, meta inte
 
 	err := detachPolicyFromGroup(conn, group, arn)
 	if err != nil {
-		return fmt.Errorf("Error removing policy %s from IAM Group %s: %v", arn, group, err)
+		return fmt.Errorf("[WARN] Error removing policy %s from IAM Group %s: %v", arn, group, err)
 	}
 	return nil
-}
-
-func resourceAwsIamGroupPolicyAttachmentImport(d *schema.ResourceData, meta interface{}) ([]*schema.ResourceData, error) {
-	idParts := strings.SplitN(d.Id(), "/", 2)
-	if len(idParts) != 2 || idParts[0] == "" || idParts[1] == "" {
-		return nil, fmt.Errorf("unexpected format of ID (%q), expected <group-name>/<policy_arn>", d.Id())
-	}
-	groupName := idParts[0]
-	policyARN := idParts[1]
-	d.Set("group", groupName)
-	d.Set("policy_arn", policyARN)
-	d.SetId(fmt.Sprintf("%s-%s", groupName, policyARN))
-	return []*schema.ResourceData{d}, nil
 }
 
 func attachPolicyToGroup(conn *iam.IAM, group string, arn string) error {
@@ -123,7 +106,10 @@ func attachPolicyToGroup(conn *iam.IAM, group string, arn string) error {
 		GroupName: aws.String(group),
 		PolicyArn: aws.String(arn),
 	})
-	return err
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func detachPolicyFromGroup(conn *iam.IAM, group string, arn string) error {
@@ -131,5 +117,8 @@ func detachPolicyFromGroup(conn *iam.IAM, group string, arn string) error {
 		GroupName: aws.String(group),
 		PolicyArn: aws.String(arn),
 	})
-	return err
+	if err != nil {
+		return err
+	}
+	return nil
 }

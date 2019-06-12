@@ -3,11 +3,10 @@ package aws
 import (
 	"fmt"
 	"log"
-	"strings"
 
 	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/arn"
 	"github.com/aws/aws-sdk-go/service/ssm"
+	"github.com/hashicorp/errwrap"
 	"github.com/hashicorp/terraform/helper/schema"
 )
 
@@ -15,10 +14,6 @@ func dataSourceAwsSsmParameter() *schema.Resource {
 	return &schema.Resource{
 		Read: dataAwsSsmParameterRead,
 		Schema: map[string]*schema.Schema{
-			"arn": {
-				Type:     schema.TypeString,
-				Computed: true,
-			},
 			"name": {
 				Type:     schema.TypeString,
 				Required: true,
@@ -32,11 +27,6 @@ func dataSourceAwsSsmParameter() *schema.Resource {
 				Computed:  true,
 				Sensitive: true,
 			},
-			"with_decryption": {
-				Type:     schema.TypeBool,
-				Optional: true,
-				Default:  true,
-			},
 		},
 	}
 }
@@ -44,31 +34,27 @@ func dataSourceAwsSsmParameter() *schema.Resource {
 func dataAwsSsmParameterRead(d *schema.ResourceData, meta interface{}) error {
 	ssmconn := meta.(*AWSClient).ssmconn
 
-	name := d.Get("name").(string)
+	log.Printf("[DEBUG] Reading SSM Parameter: %s", d.Id())
 
-	paramInput := &ssm.GetParameterInput{
-		Name:           aws.String(name),
-		WithDecryption: aws.Bool(d.Get("with_decryption").(bool)),
+	paramInput := &ssm.GetParametersInput{
+		Names: []*string{
+			aws.String(d.Get("name").(string)),
+		},
+		WithDecryption: aws.Bool(true),
 	}
 
-	log.Printf("[DEBUG] Reading SSM Parameter: %s", paramInput)
-	resp, err := ssmconn.GetParameter(paramInput)
+	resp, err := ssmconn.GetParameters(paramInput)
 
 	if err != nil {
-		return fmt.Errorf("Error describing SSM parameter: %s", err)
+		return errwrap.Wrapf("[ERROR] Error describing SSM parameter: {{err}}", err)
 	}
 
-	param := resp.Parameter
+	if len(resp.InvalidParameters) > 0 {
+		return fmt.Errorf("[ERROR] SSM Parameter %s is invalid", d.Get("name").(string))
+	}
+
+	param := resp.Parameters[0]
 	d.SetId(*param.Name)
-
-	arn := arn.ARN{
-		Partition: meta.(*AWSClient).partition,
-		Region:    meta.(*AWSClient).region,
-		Service:   "ssm",
-		AccountID: meta.(*AWSClient).accountid,
-		Resource:  fmt.Sprintf("parameter/%s", strings.TrimPrefix(d.Id(), "/")),
-	}
-	d.Set("arn", arn.String())
 	d.Set("name", param.Name)
 	d.Set("type", param.Type)
 	d.Set("value", param.Value)

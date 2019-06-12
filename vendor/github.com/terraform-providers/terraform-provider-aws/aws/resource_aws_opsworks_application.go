@@ -11,7 +11,6 @@ import (
 	"github.com/aws/aws-sdk-go/service/opsworks"
 	"github.com/hashicorp/terraform/helper/resource"
 	"github.com/hashicorp/terraform/helper/schema"
-	"github.com/hashicorp/terraform/helper/validation"
 )
 
 func resourceAwsOpsworksApplication() *schema.Resource {
@@ -22,6 +21,10 @@ func resourceAwsOpsworksApplication() *schema.Resource {
 		Update: resourceAwsOpsworksApplicationUpdate,
 		Delete: resourceAwsOpsworksApplicationDelete,
 		Schema: map[string]*schema.Schema{
+			"id": {
+				Type:     schema.TypeString,
+				Computed: true,
+			},
 			"name": {
 				Type:     schema.TypeString,
 				Required: true,
@@ -30,20 +33,28 @@ func resourceAwsOpsworksApplication() *schema.Resource {
 				Type:     schema.TypeString,
 				Computed: true,
 				Optional: true,
-				ForceNew: true,
 			},
+			// aws-flow-ruby | java | rails | php | nodejs | static | other
 			"type": {
 				Type:     schema.TypeString,
 				Required: true,
-				ValidateFunc: validation.StringInSlice([]string{
-					opsworks.AppTypeAwsFlowRuby,
-					opsworks.AppTypeJava,
-					opsworks.AppTypeRails,
-					opsworks.AppTypePhp,
-					opsworks.AppTypeNodejs,
-					opsworks.AppTypeStatic,
-					opsworks.AppTypeOther,
-				}, false),
+				ValidateFunc: func(v interface{}, k string) (ws []string, errors []error) {
+					value := v.(string)
+
+					expected := [7]string{"aws-flow-ruby", "java", "rails", "php", "nodejs", "static", "other"}
+
+					found := false
+					for _, b := range expected {
+						if b == value {
+							found = true
+						}
+					}
+					if !found {
+						errors = append(errors, fmt.Errorf(
+							"%q has to be one of [aws-flow-ruby, java, rails, php, nodejs, static, other]", k))
+					}
+					return
+				},
 			},
 			"stack_id": {
 				Type:     schema.TypeString,
@@ -168,9 +179,9 @@ func resourceAwsOpsworksApplication() *schema.Resource {
 							Type:     schema.TypeString,
 							Required: true,
 							StateFunc: func(v interface{}) string {
-								switch v := v.(type) {
+								switch v.(type) {
 								case string:
-									return strings.TrimSpace(v)
+									return strings.TrimSpace(v.(string))
 								default:
 									return ""
 								}
@@ -181,9 +192,9 @@ func resourceAwsOpsworksApplication() *schema.Resource {
 							Required:  true,
 							Sensitive: true,
 							StateFunc: func(v interface{}) string {
-								switch v := v.(type) {
+								switch v.(type) {
 								case string:
-									return strings.TrimSpace(v)
+									return strings.TrimSpace(v.(string))
 								default:
 									return ""
 								}
@@ -193,9 +204,9 @@ func resourceAwsOpsworksApplication() *schema.Resource {
 							Type:     schema.TypeString,
 							Optional: true,
 							StateFunc: func(v interface{}) string {
-								switch v := v.(type) {
+								switch v.(type) {
 								case string:
-									return strings.TrimSpace(v)
+									return strings.TrimSpace(v.(string))
 								default:
 									return ""
 								}
@@ -334,6 +345,7 @@ func resourceAwsOpsworksApplicationCreate(d *schema.ResourceData, meta interface
 
 	appID := *resp.AppId
 	d.SetId(appID)
+	d.Set("id", appID)
 
 	return resourceAwsOpsworksApplicationRead(d, meta)
 }
@@ -416,7 +428,7 @@ func resourceAwsOpsworksSetApplicationEnvironmentVariable(d *schema.ResourceData
 		}
 		if config.Secure != nil {
 
-			if aws.BoolValue(config.Secure) {
+			if bool(*config.Secure) {
 				data["secure"] = &opsworksTrueString
 			} else {
 				data["secure"] = &opsworksFalseString
@@ -617,4 +629,5 @@ func resourceAwsOpsworksSetApplicationAttributes(d *schema.ResourceData, v map[s
 		return
 	}
 
+	return
 }
